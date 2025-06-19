@@ -35,7 +35,7 @@ Context from uploaded documents:
 ${context.join('\n\n---\n\n')}`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4.1-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt }

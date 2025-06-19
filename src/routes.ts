@@ -99,8 +99,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await ragService.queryDocuments(message, {
-        retrievalCount: retrievalCount || 5,
-        similarityThreshold: similarityThreshold || 0.7,
+        retrievalCount: retrievalCount || 20,
+        similarityThreshold: similarityThreshold ||  0.75,
       });
 
       res.json(result);

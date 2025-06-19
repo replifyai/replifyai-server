@@ -18,7 +18,7 @@ export class RAGService {
     retrievalCount?: number;
     similarityThreshold?: number;
   } = {}): Promise<RAGResponse> {
-    const { retrievalCount = 10, similarityThreshold = 0.7 } = options;
+    const { retrievalCount = 20, similarityThreshold = 0.75 } = options;
 
     try {
       // Create embedding for the query
