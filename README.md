@@ -1,4 +1,4 @@
-# Replify - Backend
+# Replify - Backend Server
 
 Backend API server for the Intelligent Document Analyzer application.
 
