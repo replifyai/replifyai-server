@@ -3,8 +3,9 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
+import { universalDocumentProcessor } from "./services/universalDocumentProcessor.js";
 import { ragService } from "./services/ragService.js";
-import { insertDocumentSchema, insertSettingSchema } from "@shared/schema";
+import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -57,15 +58,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Process document asynchronously
-      documentProcessor.processDocument(document, buffer).catch(error => {
-        console.error(`Failed to process document ${document.id}:`, error);
-      });
+      processDocumentAsync(document.id, buffer, originalname, fileType);
 
       res.json(document);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }
   });
+
+  // Async function to process document and update database
+  async function processDocumentAsync(documentId: number, buffer: Buffer, originalname: string, fileType: string) {
+    try {
+      console.log(`Processing document ${documentId}...`);
+      
+      // Get the document record
+      const document = await storage.getDocument(documentId);
+      if (!document) {
+        throw new Error(`Document ${documentId} not found`);
+      }
+      
+      // Use the existing document processor
+      await documentProcessor.processDocument(document, buffer);
+      
+      console.log(`Document ${documentId} processed successfully`);
+    } catch (error) {
+      console.error(`Failed to process document ${documentId}:`, error);
+      
+      // Update document status to failed
+      await storage.updateDocumentStatus(documentId, "failed");
+    }
+  }
 
   // Delete document
   app.delete("/api/documents/:id", async (req, res) => {

@@ -1,4 +1,4 @@
-import { createEmbedding, extractDocumentMetadata } from "./openai.js";
+import { createEmbedding, extractDocumentMetadata, cleanAndFormatText } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import type { Document } from "@shared/schema";
@@ -58,7 +58,17 @@ export class DocumentProcessor {
       console.log(`Created ${chunks.length} chunks`);
 
       // Process each chunk
-      const processedChunks = [];
+      const processedChunks: Array<{
+        id: any;
+        vector: number[];
+        payload: {
+          documentId: any;
+          chunkIndex: number;
+          content: string;
+          filename: any;
+          metadata: any;
+        };
+      }> = [];
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         
@@ -141,7 +151,7 @@ export class DocumentProcessor {
               reject(new Error(`PDF parsing error: ${errData.parserError}`));
             });
             
-            pdfParser.on("pdfParser_dataReady", (pdfData: any) => {
+            pdfParser.on("pdfParser_dataReady", async (pdfData: any) => {
               try {
                 let text = '';
                 if (pdfData.Pages) {
@@ -161,14 +171,18 @@ export class DocumentProcessor {
                   }
                 }
                 
-                const cleanText = text
+                const rawText = text
                   .replace(/\s+/g, ' ')
                   .trim();
                 
-                if (cleanText.length < 50) {
+                if (rawText.length < 50) {
                   reject(new Error('PDF text extraction failed - document appears to be empty or corrupted'));
                 } else {
-                  resolve(cleanText);
+                  // Clean and format the extracted text using OpenAI
+                  console.log('Cleaning extracted PDF text...');
+                  const cleanedText = await cleanAndFormatText(rawText);
+                  console.log(`Text cleaned: ${rawText.length} -> ${cleanedText.length} characters`);
+                  resolve(cleanedText);
                 }
               } catch (parseError) {
                 reject(new Error(`Failed to parse PDF content: ${(parseError as Error).message}`));
@@ -241,7 +255,12 @@ export class DocumentProcessor {
     type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
     level: number;
   }> {
-    const sections = [];
+    const sections: Array<{
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    }> = [];
     
     // Enhanced patterns for product documents
     const productSectionPatterns = [
@@ -275,10 +294,15 @@ export class DocumentProcessor {
     }
     
     // Fallback to general structure detection
-    let currentSection = {
+    let currentSection: {
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    } = {
       title: 'Introduction',
       content: '',
-      type: 'paragraph' as const,
+      type: 'paragraph',
       level: 1
     };
 
@@ -295,7 +319,7 @@ export class DocumentProcessor {
         currentSection = {
           title: this.cleanHeading(trimmedLine),
           content: '',
-          type: 'heading' as const,
+          type: 'heading',
           level: this.getHeadingLevel(trimmedLine)
         };
       } else {
@@ -316,7 +340,7 @@ export class DocumentProcessor {
     return sections.length > 1 ? sections : [{ 
       title: 'Document', 
       content: text, 
-      type: 'paragraph' as const, 
+      type: 'paragraph', 
       level: 1 
     }];
   }
@@ -339,19 +363,29 @@ export class DocumentProcessor {
     type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
     level: number;
   }> {
-    const sections = [];
+    const sections: Array<{
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    }> = [];
     
     // Define section patterns for product documents
     const sectionPatterns = [
-      { pattern: /product\s+name|product\s+specification/i, title: 'Product Specification', type: 'product-spec' },
-      { pattern: /technical\s+specification|material|dimensions|weight/i, title: 'Technical Specifications', type: 'product-spec' },
-      { pattern: /features|benefits|advantages/i, title: 'Features & Benefits', type: 'product-spec' },
-      { pattern: /use\s+case|target\s+audience|suitable\s+for/i, title: 'Use Cases', type: 'product-spec' },
-      { pattern: /return\s+policy|exchange\s+policy|warranty/i, title: 'Policies', type: 'product-spec' },
-      { pattern: /price|mrp|cost|pricing/i, title: 'Pricing', type: 'product-spec' },
+      { pattern: /product\s+name|product\s+specification/i, title: 'Product Specification', type: 'product-spec' as const },
+      { pattern: /technical\s+specification|material|dimensions|weight/i, title: 'Technical Specifications', type: 'product-spec' as const },
+      { pattern: /features|benefits|advantages/i, title: 'Features & Benefits', type: 'product-spec' as const },
+      { pattern: /use\s+case|target\s+audience|suitable\s+for/i, title: 'Use Cases', type: 'product-spec' as const },
+      { pattern: /return\s+policy|exchange\s+policy|warranty/i, title: 'Policies', type: 'product-spec' as const },
+      { pattern: /price|mrp|cost|pricing/i, title: 'Pricing', type: 'product-spec' as const },
     ];
 
-    let currentSection = null;
+    let currentSection: {
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    } | null = null;
     let unmatchedContent = '';
 
     for (const paragraph of paragraphs) {
@@ -373,7 +407,7 @@ export class DocumentProcessor {
             sections.push({
               title: 'Additional Information',
               content: unmatchedContent.trim(),
-              type: 'paragraph' as const,
+              type: 'paragraph',
               level: 2
             });
             unmatchedContent = '';
@@ -383,7 +417,7 @@ export class DocumentProcessor {
           currentSection = {
             title,
             content: trimmedPara,
-            type: type as any,
+            type: type,
             level: 2
           };
           matched = true;
@@ -410,7 +444,7 @@ export class DocumentProcessor {
       sections.push({
         title: 'Additional Information',
         content: unmatchedContent.trim(),
-        type: 'paragraph' as const,
+        type: 'paragraph',
         level: 2
       });
     }
@@ -429,7 +463,12 @@ export class DocumentProcessor {
     type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
     level: number;
   }> {
-    const sections = [];
+    const sections: Array<{
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    }> = [];
     const sentences = this.splitIntoSentences(text);
     const targetSectionSize = 3; // sentences per section
     
@@ -441,7 +480,7 @@ export class DocumentProcessor {
         sections.push({
           title: `Section ${Math.floor(i / targetSectionSize) + 1}`,
           content,
-          type: 'paragraph' as const,
+          type: 'paragraph',
           level: 2
         });
       }
@@ -457,7 +496,12 @@ export class DocumentProcessor {
     level: number;
   }> {
     const maxSectionSize = 800;
-    const sections = [];
+    const sections: Array<{
+      title: string;
+      content: string;
+      type: 'heading' | 'section' | 'list' | 'paragraph' | 'table' | 'product-spec';
+      level: number;
+    }> = [];
     const content = section.content;
     
     // Split by sentences and group them
@@ -721,7 +765,7 @@ export class DocumentProcessor {
   }
 
   private extractTopics(text: string): string[] {
-    const topics = [];
+    const topics: string[] = [];
     const lowerText = text.toLowerCase();
     
     // Product-specific topic patterns
@@ -750,7 +794,7 @@ export class DocumentProcessor {
   }
 
   private extractKeyTerms(text: string): string[] {
-    const keyTerms = [];
+    const keyTerms: string[] = [];
     
     // Product-specific key terms
     const productTerms = text.match(/\b(?:SKU|MRP|HSN|GST|warranty|exchange|return|specification|material|dimension|weight|color|size|model|version|series|capacity|power|voltage|frequency|temperature|pressure)\b/gi) || [];

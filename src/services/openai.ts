@@ -1,3 +1,69 @@
+// Add fetch polyfill for Node.js compatibility
+import fetch, { Headers, Request, Response } from 'node-fetch';
+
+if (typeof globalThis.fetch === 'undefined') {
+  globalThis.fetch = fetch as any;
+  globalThis.Headers = Headers as any;
+  globalThis.Request = Request as any;
+  globalThis.Response = Response as any;
+}
+
+// Add AbortController polyfill if not available
+if (typeof globalThis.AbortController === 'undefined') {
+  globalThis.AbortController = class AbortController {
+    signal: AbortSignal;
+    
+    constructor() {
+      this.signal = new AbortSignal();
+    }
+    
+    abort() {
+      // Simple implementation - in a real scenario you'd trigger the abort
+      (this.signal as any).aborted = true;
+    }
+  } as any;
+  
+  globalThis.AbortSignal = class AbortSignal {
+    aborted: boolean = false;
+    
+    addEventListener() {}
+    removeEventListener() {}
+    dispatchEvent() { return true; }
+  } as any;
+}
+
+// Add FormData polyfill if not available
+if (typeof globalThis.FormData === 'undefined') {
+  globalThis.FormData = class FormData {
+    private data: Map<string, any> = new Map();
+    
+    append(name: string, value: any) {
+      this.data.set(name, value);
+    }
+    
+    get(name: string) {
+      return this.data.get(name);
+    }
+    
+    has(name: string) {
+      return this.data.has(name);
+    }
+  } as any;
+}
+
+// Add Blob polyfill if not available
+if (typeof globalThis.Blob === 'undefined') {
+  globalThis.Blob = class Blob {
+    constructor(chunks?: any[], options?: any) {
+      // Simple blob implementation for Node.js
+      this.size = 0;
+      this.type = options?.type || '';
+    }
+    size: number;
+    type: string;
+  } as any;
+}
+
 import OpenAI from "openai";
 import { env } from "../env";
 
@@ -72,5 +138,45 @@ export async function extractDocumentMetadata(text: string, filename: string): P
   } catch (error) {
     console.error("Failed to extract metadata:", error);
     return { categories: [], topics: [], document_type: "unknown", key_entities: [] };
+  }
+}
+
+export async function cleanAndFormatText(noisyText: string): Promise<string> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are a text cleaning specialist. Your job is to clean and format noisy text extracted from PDFs. 
+
+RULES:
+1. Fix scattered characters (e.g., "B a r e f o o t" → "Barefoot")
+2. Remove excessive whitespace and fix spacing
+3. Correct obvious OCR errors and garbled text
+4. Maintain the original meaning and structure
+5. Keep important formatting like bullet points, numbers, and sections
+6. Remove redundant characters and fix word breaks
+7. Ensure proper sentence structure and punctuation
+8. Preserve technical terms, product names, and specific data
+9. Return ONLY the cleaned text, no explanations or comments
+
+The text may contain product information, specifications, or other structured data - preserve the logical structure while cleaning the formatting.`
+        },
+        {
+          role: "user",
+          content: `Clean and format this noisy text:\n\n${noisyText}`
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 2000,
+    });
+
+    const cleanedText = response.choices[0].message.content || noisyText;
+    return cleanedText.trim();
+  } catch (error) {
+    console.error("Failed to clean text:", error);
+    // Return original text if cleaning fails
+    return noisyText;
   }
 }
