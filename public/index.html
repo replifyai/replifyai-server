@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Document Analyzer API</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .api-grid {
+            padding: 40px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+        }
+
+        .api-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            border-left: 5px solid;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+        }
+
+        .api-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .api-card.get { border-left-color: #28a745; }
+        .api-card.post { border-left-color: #007bff; }
+        .api-card.delete { border-left-color: #dc3545; }
+
+        .method {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 15px;
+        }
+
+        .method.get { background: #d4edda; color: #155724; }
+        .method.post { background: #cce5ff; color: #004085; }
+        .method.delete { background: #f8d7da; color: #721c24; }
+
+        .endpoint {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            word-break: break-all;
+        }
+
+        .description {
+            color: #6c757d;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .parameters {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .parameters h4 {
+            color: #495057;
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .param-list {
+            list-style: none;
+        }
+
+        .param-list li {
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+            color: #495057;
+        }
+
+        .param-list li:last-child {
+            border-bottom: none;
+        }
+
+        .footer {
+            background: #f8f9fa;
+            padding: 30px;
+            text-align: center;
+            color: #6c757d;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: #28a745;
+            color: white;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .api-grid {
+                grid-template-columns: 1fr;
+                padding: 20px;
+            }
+            
+            .header {
+                padding: 30px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Intelligent Document Analyzer API</h1>
+            <p>Backend API for document processing, analysis, and RAG-powered chat</p>
+            <span class="status-badge">LIVE</span>
+        </div>
+
+        <div class="api-grid">
+            <!-- Documents API -->
+            <!-- <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/documents</div>
+                <div class="description">
+                    Retrieve all uploaded documents with their processing status and metadata.
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <ul class="param-list">
+                        <li>Array of document objects</li>
+                        <li>Includes: id, filename, status, fileType, fileSize</li>
+                    </ul>
+                </div>
+            </div> -->
+
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/documents/upload</div>
+                <div class="description">
+                    Upload a document (PDF, DOCX, or TXT) for processing and indexing. The document will be processed asynchronously.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <ul class="param-list">
+                        <li><strong>file:</strong> multipart/form-data (required)</li>
+                        <li><strong>Supported types:</strong> PDF, DOCX, TXT</li>
+                        <li><strong>Max size:</strong> 10MB</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- <div class="api-card delete">
+                <span class="method delete">DELETE</span>
+                <div class="endpoint">/api/documents/:id</div>
+                <div class="description">
+                    Delete a document and remove it from the vector database. This action is irreversible.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <ul class="param-list">
+                        <li><strong>id:</strong> Document ID (path parameter)</li>
+                    </ul>
+                </div>
+            </div> -->
+
+            <!-- Chat API -->
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/chat</div>
+                <div class="description">
+                    Send a message to the RAG-powered chat system. Get AI responses based on your uploaded documents.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <ul class="param-list">
+                        <li><strong>message:</strong> string (required)</li>
+                        <li><strong>retrievalCount:</strong> number (default: 20)</li>
+                        <li><strong>similarityThreshold:</strong> number (default: 0.75)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/chat/history</div>
+                <div class="description">
+                    Retrieve the complete chat history including all messages and AI responses.
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <ul class="param-list">
+                        <li>Array of message objects</li>
+                        <li>Includes: message, response, timestamp</li>
+                    </ul>
+                </div>
+            </div> -->
+
+            <!-- Stats API -->
+            <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/stats</div>
+                <div class="description">
+                    Get system statistics including document count, vector database status, and service health.
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <ul class="param-list">
+                        <li><strong>documentCount:</strong> Total documents</li>
+                        <li><strong>qdrantStatus:</strong> Vector DB status</li>
+                        <li><strong>openaiStatus:</strong> AI service status</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Settings API -->
+            <!-- <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/settings/:key</div>
+                <div class="description">
+                    Retrieve a specific system setting by key.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <ul class="param-list">
+                        <li><strong>key:</strong> Setting key (path parameter)</li>
+                    </ul>
+                </div>
+            </div> -->
+
+            <!-- <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/settings</div>
+                <div class="description">
+                    Create or update a system setting.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <ul class="param-list">
+                        <li><strong>key:</strong> string (required)</li>
+                        <li><strong>value:</strong> string (required)</li>
+                    </ul>
+                </div>
+            </div> -->
+        </div>
+
+        <div class="footer">
+            <p>🚀 Built with Express.js, TypeScript, and OpenAI</p>
+            <p>For technical support or API questions, please refer to the documentation.</p>
+        </div>
+    </div>
+
+    <script>
+        // Add some interactivity
+        document.addEventListener('DOMContentLoaded', function() {
+            const cards = document.querySelectorAll('.api-card');
+            
+            cards.forEach(card => {
+                card.addEventListener('click', function() {
+                    const endpoint = this.querySelector('.endpoint').textContent;
+                    const method = this.querySelector('.method').textContent;
+                    
+                    // Copy API endpoint to clipboard
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(`${method} ${endpoint}`).then(() => {
+                            // Show a temporary notification
+                            const originalBg = this.style.backgroundColor;
+                            this.style.backgroundColor = '#e8f5e8';
+                            setTimeout(() => {
+                                this.style.backgroundColor = originalBg;
+                            }, 500);
+                        });
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html> 

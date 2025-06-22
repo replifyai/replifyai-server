@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import cors from "cors";
+import path from "path";
 import { registerRoutes } from "./routes";
 import { env, validateEnv } from "./env";
 
@@ -19,6 +20,9 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// Serve static files from public directory
+app.use(express.static(path.join(process.cwd(), 'public')));
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -66,8 +70,13 @@ app.use((req, res, next) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
   });
 
-  // Catch-all for undefined routes
-  app.use('*', (req, res) => {
+  // Serve the API documentation page at root
+  app.get('/', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+  });
+
+  // Catch-all for undefined routes (but not static files)
+  app.use('/api/*', (req, res) => {
     res.status(404).json({ message: 'API endpoint not found' });
   });
 
@@ -75,5 +84,6 @@ app.use((req, res, next) => {
   server.listen(port, () => {
     console.log(`🚀 Backend server running on port ${port}`);
     console.log(`📡 API available at http://localhost:${port}/api`);
+    console.log(`📄 Documentation available at http://localhost:${port}`);
   });
 })();
