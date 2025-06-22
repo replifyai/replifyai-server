@@ -295,7 +295,7 @@ export class DocumentProcessor {
         currentSection = {
           title: this.cleanHeading(trimmedLine),
           content: '',
-          type: 'heading' as const,
+          type: 'paragraph' as const,
           level: this.getHeadingLevel(trimmedLine)
         };
       } else {

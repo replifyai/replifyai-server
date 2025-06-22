@@ -56,11 +56,11 @@ export class RAGService {
       }));
 
       // Store the conversation
-      await storage.createMessage({
-        message: query,
-        response,
-        sources: sources,
-      });
+      // await storage.createMessage({
+      //   message: query,
+      //   response,
+      //   sources: sources,
+      // });
 
       return {
         response,

@@ -54,7 +54,7 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+async function initializeApp() {
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -80,10 +80,23 @@ app.use((req, res, next) => {
     res.status(404).json({ message: 'API endpoint not found' });
   });
 
-  const port = env.PORT || 5000;
-  server.listen(port, () => {
-    console.log(`🚀 Backend server running on port ${port}`);
-    console.log(`📡 API available at http://localhost:${port}/api`);
-    console.log(`📄 Documentation available at http://localhost:${port}`);
+  return server;
+}
+
+// Initialize the app
+initializeApp().catch(console.error);
+
+// For local development, start the server
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  initializeApp().then((server) => {
+    const port = env.PORT || 5000;
+    server.listen(port, () => {
+      console.log(`🚀 Backend server running on port ${port}`);
+      console.log(`📡 API available at http://localhost:${port}/api`);
+      console.log(`📄 Documentation available at http://localhost:${port}`);
+    });
   });
-})();
+}
+
+// Export the app for Vercel
+export default app;

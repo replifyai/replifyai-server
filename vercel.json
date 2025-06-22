@@ -1,8 +1,9 @@
 {
     "version": 2,
+    "buildCommand": "npm run build",
     "builds": [
       {
-        "src": "api/**/*.js",
+        "src": "api/index.js",
         "use": "@vercel/node"
       },
       {
@@ -13,7 +14,11 @@
     "routes": [
       {
         "src": "/api/(.*)",
-        "dest": "/api/$1"
+        "dest": "/api/index.js"
+      },
+      {
+        "src": "/health",
+        "dest": "/api/index.js"
       },
       {
         "src": "/(.*)",

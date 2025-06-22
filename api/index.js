@@ -1,9 +1,7 @@
-require('dotenv').config();
+import '../dist/index.js';
 
-// No need to set default config values since we're using environment variables
-// The configService will handle defaults
+// Import the built Express app
+import app from '../dist/index.js';
 
-const app = require('../src/index');
-
-// Export the express app for Vercel
-module.exports = app;
+// Export for Vercel
+export default app; 
