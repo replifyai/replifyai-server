@@ -4,7 +4,7 @@ import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
 import { ragService } from "./services/ragService.js";
-import { insertDocumentSchema, insertSettingSchema } from "@shared/schema";
+import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),

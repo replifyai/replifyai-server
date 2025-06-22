@@ -1,9 +1,10 @@
 import { createEmbedding, extractDocumentMetadata } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
-import type { Document } from "@shared/schema";
+import type { Document } from "../../shared/schema.js";
 import mammoth from "mammoth";
 import pdf2json from "pdf2json";
+import multer from "multer";
 
 export interface ProcessedChunk {
   content: string;

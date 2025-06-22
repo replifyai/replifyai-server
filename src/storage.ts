@@ -1,4 +1,4 @@
-import { documents, documentChunks, chatMessages, settings, type Document, type InsertDocument, type DocumentChunk, type InsertChunk, type ChatMessage, type InsertMessage, type Setting, type InsertSetting } from "@shared/schema";
+import { documents, documentChunks, chatMessages, settings, type Document, type InsertDocument, type DocumentChunk, type InsertChunk, type ChatMessage, type InsertMessage, type Setting, type InsertSetting } from "../shared/schema.js";
 
 export interface IStorage {
   // Document operations
