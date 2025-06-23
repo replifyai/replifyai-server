@@ -4,7 +4,7 @@ import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
 import { ragService } from "./services/ragService.js";
-import { insertDocumentSchema, insertSettingSchema } from "@shared/schema";
+import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -119,14 +119,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Context Missing Query Management Endpoints
+  
+  // Get all unresolved context missing queries
+  // app.get("/api/context-missing", async (req, res) => {
+  //   try {
+  //     const queries = await storage.getUnresolvedContextMissingQueries();
+  //     res.json(queries);
+  //   } catch (error) {
+  //     res.status(500).json({ message: (error as Error).message });
+  //   }
+  // });
+
+  // Get context missing analytics
+  // app.get("/api/context-missing/analytics", async (req, res) => {
+  //   try {
+  //     const analytics = await storage.getContextMissingAnalytics();
+  //     res.json(analytics);
+  //   } catch (error) {
+  //     res.status(500).json({ message: (error as Error).message });
+  //   }
+  // });
+
+  // Resolve a context missing query
+  // app.post("/api/context-missing/:id/resolve", async (req, res) => {
+  //   try {
+  //     const id = parseInt(req.params.id);
+  //     const { resolutionNotes } = req.body;
+      
+  //     await storage.resolveContextMissingQuery(id, resolutionNotes);
+  //     res.json({ message: "Query resolved successfully" });
+  //   } catch (error) {
+  //     res.status(500).json({ message: (error as Error).message });
+  //   }
+  // });
+
   // Get system stats
   app.get("/api/stats", async (req, res) => {
     try {
       const stats = await ragService.getSystemStats();
       const qdrantStatus = await ragService.getQdrantStatus();
+      const contextMissingAnalytics = await storage.getContextMissingAnalytics();
       
       res.json({
         ...stats,
+        contextMissingQueries: {
+          total: contextMissingAnalytics.totalQueries,
+          unresolved: contextMissingAnalytics.totalQueries - contextMissingAnalytics.resolvedQueries,
+          byCategory: contextMissingAnalytics.byCategory,
+          byPriority: contextMissingAnalytics.byPriority,
+        },
         qdrantStatus: qdrantStatus.status === "error" ? "disconnected" : "connected",
         openaiStatus: process.env.OPENAI_API_KEY ? "connected" : "not configured",
       });

@@ -2,8 +2,8 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import cors from "cors";
 import path from "path";
-import { registerRoutes } from "./routes";
-import { env, validateEnv } from "./env";
+import { registerRoutes } from "./routes.js";
+import { env, validateEnv } from "./env.js";
 
 // Validate environment variables on startup
 validateEnv();
@@ -54,7 +54,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Initialize app synchronously for Vercel
+let isInitialized = false;
+
 async function initializeApp() {
+  if (isInitialized) return app;
+  
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -80,23 +85,26 @@ async function initializeApp() {
     res.status(404).json({ message: 'API endpoint not found' });
   });
 
+  isInitialized = true;
   return server;
 }
 
-// Initialize the app
-initializeApp().catch(console.error);
+// Initialize the app immediately
+const initPromise = initializeApp().catch(console.error);
 
 // For local development, start the server
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-  initializeApp().then((server) => {
+  initPromise.then((server) => {
     const port = env.PORT || 5000;
-    server.listen(port, () => {
-      console.log(`🚀 Backend server running on port ${port}`);
-      console.log(`📡 API available at http://localhost:${port}/api`);
-      console.log(`📄 Documentation available at http://localhost:${port}`);
-    });
+    if (server) {
+      server.listen(port, () => {
+        console.log(`🚀 Backend server running on port ${port}`);
+        console.log(`📡 API available at http://localhost:${port}/api`);
+        console.log(`📄 Documentation available at http://localhost:${port}`);
+      });
+    }
   });
 }
 
-// Export the app for Vercel
+// Export the app for Vercel - ensure it's initialized
 export default app;

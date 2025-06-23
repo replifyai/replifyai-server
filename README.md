@@ -1,4 +1,4 @@
-# Replify - Backend
+# Replify - Backend Server
 
 Backend API server for the Intelligent Document Analyzer application.
 
@@ -8,7 +8,6 @@ Backend API server for the Intelligent Document Analyzer application.
 - PDF, DOCX, and other document format support
 - OpenAI integration for document analysis
 - Vector database integration with Qdrant
-- Session management and authentication
 - RESTful API endpoints
 
 ## Getting Started

@@ -1,4 +1,4 @@
-import { documents, documentChunks, chatMessages, settings, type Document, type InsertDocument, type DocumentChunk, type InsertChunk, type ChatMessage, type InsertMessage, type Setting, type InsertSetting } from "@shared/schema";
+import { documents, documentChunks, chatMessages, settings, contextMissingQueries, type Document, type InsertDocument, type DocumentChunk, type InsertChunk, type ChatMessage, type InsertMessage, type Setting, type InsertSetting, type ContextMissingQuery, type InsertContextMissingQuery } from "../shared/schema.js";
 
 export interface IStorage {
   // Document operations
@@ -18,6 +18,18 @@ export interface IStorage {
   createMessage(message: InsertMessage): Promise<ChatMessage>;
   getAllMessages(): Promise<ChatMessage[]>;
 
+  // Context missing query operations
+  createContextMissingQuery(query: InsertContextMissingQuery): Promise<ContextMissingQuery>;
+  getUnresolvedContextMissingQueries(): Promise<ContextMissingQuery[]>;
+  resolveContextMissingQuery(queryId: number, resolutionNotes?: string): Promise<void>;
+  getContextMissingAnalytics(): Promise<{
+    totalQueries: number;
+    resolvedQueries: number;
+    byCategory: Record<string, number>;
+    byPriority: Record<string, number>;
+    recentTrends: any[];
+  }>;
+
   // Settings operations
   getSetting(key: string): Promise<Setting | undefined>;
   setSetting(setting: InsertSetting): Promise<Setting>;
@@ -27,20 +39,24 @@ export class MemStorage implements IStorage {
   private documents: Map<number, Document>;
   private chunks: Map<number, DocumentChunk>;
   private messages: Map<number, ChatMessage>;
+  private contextMissingQueries: Map<number, ContextMissingQuery>;
   private settingsMap: Map<string, Setting>;
   private currentDocumentId: number;
   private currentChunkId: number;
   private currentMessageId: number;
+  private currentContextMissingId: number;
   private currentSettingId: number;
 
   constructor() {
     this.documents = new Map();
     this.chunks = new Map();
     this.messages = new Map();
+    this.contextMissingQueries = new Map();
     this.settingsMap = new Map();
     this.currentDocumentId = 1;
     this.currentChunkId = 1;
     this.currentMessageId = 1;
+    this.currentContextMissingId = 1;
     this.currentSettingId = 1;
   }
 
@@ -126,6 +142,8 @@ export class MemStorage implements IStorage {
       id,
       createdAt: new Date(),
       sources: insertMessage.sources || null,
+      isContextMissing: insertMessage.isContextMissing || false,
+      tags: insertMessage.tags || null,
     };
     this.messages.set(id, message);
     return message;
@@ -158,6 +176,89 @@ export class MemStorage implements IStorage {
       this.settingsMap.set(insertSetting.key, setting);
       return setting;
     }
+  }
+
+  async createContextMissingQuery(insertQuery: InsertContextMissingQuery): Promise<ContextMissingQuery> {
+    const id = this.currentContextMissingId++;
+    const query: ContextMissingQuery = {
+      ...insertQuery,
+      id,
+      createdAt: new Date(),
+      resolvedAt: null,
+      detectedPatterns: insertQuery.detectedPatterns || null,
+      suggestedTopics: insertQuery.suggestedTopics || null,
+      category: insertQuery.category || null,
+      priority: insertQuery.priority || "medium",
+      resolved: insertQuery.resolved || false,
+      resolutionNotes: insertQuery.resolutionNotes || null,
+    };
+    this.contextMissingQueries.set(id, query);
+    return query;
+  }
+
+  async getUnresolvedContextMissingQueries(): Promise<ContextMissingQuery[]> {
+    return Array.from(this.contextMissingQueries.values())
+      .filter(query => !query.resolved)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async resolveContextMissingQuery(queryId: number, resolutionNotes?: string): Promise<void> {
+    const query = this.contextMissingQueries.get(queryId);
+    if (query) {
+      query.resolved = true;
+      query.resolvedAt = new Date();
+      if (resolutionNotes) {
+        query.resolutionNotes = resolutionNotes;
+      }
+      this.contextMissingQueries.set(queryId, query);
+    }
+  }
+
+  async getContextMissingAnalytics(): Promise<{
+    totalQueries: number;
+    resolvedQueries: number;
+    byCategory: Record<string, number>;
+    byPriority: Record<string, number>;
+    recentTrends: any[];
+  }> {
+    const queries = Array.from(this.contextMissingQueries.values());
+    const resolvedQueries = queries.filter(q => q.resolved);
+    
+    const byCategory: Record<string, number> = {};
+    const byPriority: Record<string, number> = {};
+    
+    queries.forEach(query => {
+      if (query.category) {
+        byCategory[query.category] = (byCategory[query.category] || 0) + 1;
+      }
+      if (query.priority) {
+        byPriority[query.priority] = (byPriority[query.priority] || 0) + 1;
+      }
+    });
+
+    // Recent trends (last 30 days by day)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const recentQueries = queries.filter(q => q.createdAt >= thirtyDaysAgo);
+    const trendsByDate: Record<string, number> = {};
+    
+    recentQueries.forEach(query => {
+      const dateKey = query.createdAt.toISOString().split('T')[0];
+      trendsByDate[dateKey] = (trendsByDate[dateKey] || 0) + 1;
+    });
+    
+    const recentTrends = Object.entries(trendsByDate)
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalQueries: queries.length,
+      resolvedQueries: resolvedQueries.length,
+      byCategory,
+      byPriority,
+      recentTrends,
+    };
   }
 }
 
