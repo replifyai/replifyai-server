@@ -5,6 +5,7 @@ import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
 import { ragService } from "./services/ragService.js";
 import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
+import { env } from "./env.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -56,12 +57,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         metadata: { mimetype },
       });
 
-      // Process document asynchronously
-      documentProcessor.processDocument(document, buffer).catch(error => {
-        console.error(`Failed to process document ${document.id}:`, error);
-      });
-
-      res.json(document);
+      try {
+        // Process document synchronously with timeout
+        await Promise.race([
+          documentProcessor.processDocument(document, buffer),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Document processing timeout')), env.API_TIMEOUT)
+          )
+        ]);
+        
+        // Get the updated document with final status
+        const processedDocument = await storage.getDocument(document.id);
+        
+        res.json(processedDocument);
+      } catch (processingError) {
+        // If processing fails, return error with document info
+        console.error(`Failed to process document ${document.id}:`, processingError);
+        res.status(500).json({ 
+          message: "Document upload succeeded but processing failed", 
+          error: (processingError as Error).message,
+          document 
+        });
+      }
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }

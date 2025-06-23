@@ -103,16 +103,49 @@
         .parameters {
             background: white;
             border-radius: 8px;
-            padding: 15px;
             margin-top: 15px;
+            border: 1px solid #e9ecef;
+            overflow: hidden;
         }
 
         .parameters h4 {
             color: #495057;
-            margin-bottom: 10px;
+            margin: 0;
+            padding: 15px;
             font-size: 0.9rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            background: #f8f9fa;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background-color 0.2s ease;
+        }
+
+        .parameters h4:hover {
+            background: #e9ecef;
+        }
+
+        .parameters h4::after {
+            content: '▼';
+            font-size: 0.7rem;
+            transition: transform 0.3s ease;
+        }
+
+        .parameters h4.collapsed::after {
+            transform: rotate(-90deg);
+        }
+
+        .parameters-content {
+            padding: 15px;
+            display: block;
+            transition: all 0.3s ease;
+        }
+
+        .parameters-content.collapsed {
+            display: none;
         }
 
         .param-list {
@@ -176,38 +209,111 @@
 
         <div class="api-grid">
             <!-- Documents API -->
-            <!-- <div class="api-card get">
+
+            <div class="api-card get">
                 <span class="method get">GET</span>
                 <div class="endpoint">/api/documents</div>
                 <div class="description">
-                    Retrieve all uploaded documents with their processing status and metadata.
+                    Get a list of all uploaded documents with their processing status and metadata.
                 </div>
                 <div class="parameters">
                     <h4>Response</h4>
-                    <ul class="param-list">
-                        <li>Array of document objects</li>
-                        <li>Includes: id, filename, status, fileType, fileSize</li>
-                    </ul>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Array of documents:</strong> Each document contains:</li>
+                            <li><strong>id:</strong> number - Document ID</li>
+                            <li><strong>filename:</strong> string - Timestamped filename</li>
+                            <li><strong>originalName:</strong> string - Original uploaded filename</li>
+                            <li><strong>fileType:</strong> "pdf" | "docx" | "txt"</li>
+                            <li><strong>fileSize:</strong> number - File size in bytes</li>
+                            <li><strong>status:</strong> "uploading" | "processing" | "indexed" | "error"</li>
+                            <li><strong>uploadedAt:</strong> string - ISO timestamp</li>
+                            <li><strong>processedAt:</strong> string | null - ISO timestamp or null</li>
+                            <li><strong>chunkCount:</strong> number - Number of text chunks</li>
+                            <li><strong>metadata:</strong> object - File metadata</li>
+                        </ul>
+                    </div>
                 </div>
-            </div> -->
+            </div>
 
             <div class="api-card post">
                 <span class="method post">POST</span>
                 <div class="endpoint">/api/documents/upload</div>
                 <div class="description">
-                    Upload a document (PDF, DOCX, or TXT) for processing and indexing. The document will be processed asynchronously.
+                    Upload a document (PDF, DOCX, or TXT) for processing and indexing. The endpoint waits for complete processing before responding.
                 </div>
                 <div class="parameters">
                     <h4>Parameters</h4>
-                    <ul class="param-list">
-                        <li><strong>file:</strong> multipart/form-data (required)</li>
-                        <li><strong>Supported types:</strong> PDF, DOCX, TXT</li>
-                        <li><strong>Max size:</strong> 10MB</li>
-                    </ul>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>file:</strong> multipart/form-data (required)</li>
+                            <li><strong>Supported types:</strong> PDF, DOCX, TXT</li>
+                            <li><strong>Max size:</strong> 10MB</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Success (200):</strong> Returns the fully processed document</li>
+                            <li><strong>id:</strong> number - Document ID</li>
+                            <li><strong>filename:</strong> string - Timestamped filename</li>
+                            <li><strong>originalName:</strong> string - Original uploaded filename</li>
+                            <li><strong>fileType:</strong> "pdf" | "docx" | "txt"</li>
+                            <li><strong>fileSize:</strong> number - File size in bytes</li>
+                            <li><strong>status:</strong> "indexed" (success) or "error" (failure)</li>
+                            <li><strong>uploadedAt:</strong> string - ISO timestamp when upload started</li>
+                            <li><strong>processedAt:</strong> string - ISO timestamp when processing completed</li>
+                            <li><strong>chunkCount:</strong> number - Number of text chunks created</li>
+                            <li><strong>metadata:</strong> object - File metadata (includes mimetype)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Error Response (500)</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>message:</strong> "Document upload succeeded but processing failed"</li>
+                            <li><strong>error:</strong> string - Detailed error message</li>
+                            <li><strong>document:</strong> object - Partial document info</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Example Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Processing Time:</strong> Typically 10-60 seconds</li>
+                            <li><strong>Timeout:</strong> Maximum 30 seconds processing time</li>
+                            <li><strong>Ready for Use:</strong> Document immediately available for chat queries</li>
+                            <li><strong>Status "indexed":</strong> Confirms successful processing and vector storage</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Sample JSON Response</h4>
+                    <div class="parameters-content">
+                        <pre style="background: #f1f3f4; padding: 15px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; color: #333;">
+{
+  "id": 1,
+  "filename": "1750659370433_document.pdf",
+  "originalName": "document.pdf",
+  "fileType": "pdf",
+  "fileSize": 154470,
+  "status": "indexed",
+  "uploadedAt": "2025-06-23T06:16:10.433Z",
+  "processedAt": "2025-06-23T06:16:29.391Z",
+  "chunkCount": 10,
+  "metadata": {
+    "mimetype": "application/pdf"
+  }
+}</pre>
+                    </div>
                 </div>
             </div>
 
-            <!-- <div class="api-card delete">
+            <div class="api-card delete">
                 <span class="method delete">DELETE</span>
                 <div class="endpoint">/api/documents/:id</div>
                 <div class="description">
@@ -215,13 +321,24 @@
                 </div>
                 <div class="parameters">
                     <h4>Parameters</h4>
-                    <ul class="param-list">
-                        <li><strong>id:</strong> Document ID (path parameter)</li>
-                    </ul>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>id:</strong> Document ID (path parameter)</li>
+                        </ul>
+                    </div>
                 </div>
-            </div> -->
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>message:</strong> "Document deleted successfully"</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
 
             <!-- Chat API -->
+
             <div class="api-card post">
                 <span class="method post">POST</span>
                 <div class="endpoint">/api/chat</div>
@@ -230,28 +347,40 @@
                 </div>
                 <div class="parameters">
                     <h4>Parameters</h4>
-                    <ul class="param-list">
-                        <li><strong>message:</strong> string (required)</li>
-                        <li><strong>retrievalCount:</strong> number (default: 20)</li>
-                        <li><strong>similarityThreshold:</strong> number (default: 0.75)</li>
-                    </ul>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>message:</strong> string (required)</li>
+                            <li><strong>retrievalCount:</strong> number (default: 20)</li>
+                            <li><strong>similarityThreshold:</strong> number (default: 0.75)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response (RAGResponse)</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>query:</strong> string</li>
+                            <li><strong>response:</strong> string (AI-generated response)</li>
+                            <li><strong>sources:</strong> Array&lt;object&gt; (relevant document chunks)</li>
+                            <li><strong>sources[].documentId:</strong> number</li>
+                            <li><strong>sources[].filename:</strong> string</li>
+                            <li><strong>sources[].content:</strong> string (truncated to ~200 chars)</li>
+                            <li><strong>sources[].score:</strong> number (relevance score)</li>
+                            <li><strong>sources[].metadata:</strong> object (rich document metadata)</li>
+                            <li><strong>sources[].metadata.filename:</strong> string</li>
+                            <li><strong>sources[].metadata.topics:</strong> string[]</li>
+                            <li><strong>sources[].metadata.keyTerms:</strong> string[]</li>
+                            <li><strong>sources[].metadata.docMetadata:</strong> object</li>
+                            <li><strong>contextAnalysis:</strong> object</li>
+                            <li><strong>contextAnalysis.isContextMissing:</strong> boolean</li>
+                            <li><strong>contextAnalysis.suggestedTopics:</strong> string[]</li>
+                            <li><strong>contextAnalysis.category:</strong> string</li>
+                            <li><strong>contextAnalysis.priority:</strong> "low" | "medium" | "high"</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
 
-            <!-- <div class="api-card get">
-                <span class="method get">GET</span>
-                <div class="endpoint">/api/chat/history</div>
-                <div class="description">
-                    Retrieve the complete chat history including all messages and AI responses.
-                </div>
-                <div class="parameters">
-                    <h4>Response</h4>
-                    <ul class="param-list">
-                        <li>Array of message objects</li>
-                        <li>Includes: message, response, timestamp</li>
-                    </ul>
-                </div>
-            </div> -->
 
             <!-- Stats API -->
             <div class="api-card get">
@@ -262,43 +391,23 @@
                 </div>
                 <div class="parameters">
                     <h4>Response</h4>
-                    <ul class="param-list">
-                        <li><strong>documentCount:</strong> Total documents</li>
-                        <li><strong>qdrantStatus:</strong> Vector DB status</li>
-                        <li><strong>openaiStatus:</strong> AI service status</li>
-                    </ul>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>documentCount:</strong> number</li>
+                            <li><strong>chunkCount:</strong> number</li>
+                            <li><strong>indexedDocuments:</strong> number</li>
+                            <li><strong>contextMissingQueries:</strong> object</li>
+                            <li><strong>contextMissingQueries.total:</strong> number</li>
+                            <li><strong>contextMissingQueries.unresolved:</strong> number</li>
+                            <li><strong>contextMissingQueries.byCategory:</strong> object</li>
+                            <li><strong>contextMissingQueries.byPriority:</strong> object</li>
+                            <li><strong>qdrantStatus:</strong> "connected" | "disconnected"</li>
+                            <li><strong>openaiStatus:</strong> "connected" | "not configured"</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
 
-            <!-- Settings API -->
-            <!-- <div class="api-card get">
-                <span class="method get">GET</span>
-                <div class="endpoint">/api/settings/:key</div>
-                <div class="description">
-                    Retrieve a specific system setting by key.
-                </div>
-                <div class="parameters">
-                    <h4>Parameters</h4>
-                    <ul class="param-list">
-                        <li><strong>key:</strong> Setting key (path parameter)</li>
-                    </ul>
-                </div>
-            </div> -->
-
-            <!-- <div class="api-card post">
-                <span class="method post">POST</span>
-                <div class="endpoint">/api/settings</div>
-                <div class="description">
-                    Create or update a system setting.
-                </div>
-                <div class="parameters">
-                    <h4>Parameters</h4>
-                    <ul class="param-list">
-                        <li><strong>key:</strong> string (required)</li>
-                        <li><strong>value:</strong> string (required)</li>
-                    </ul>
-                </div>
-            </div> -->
         </div>
 
         <div class="footer">
@@ -312,8 +421,14 @@
         document.addEventListener('DOMContentLoaded', function() {
             const cards = document.querySelectorAll('.api-card');
             
+            // Handle API card clicks for copying endpoints
             cards.forEach(card => {
-                card.addEventListener('click', function() {
+                card.addEventListener('click', function(e) {
+                    // Don't trigger on accordion headers
+                    if (e.target.tagName === 'H4' || e.target.closest('.parameters h4')) {
+                        return;
+                    }
+                    
                     const endpoint = this.querySelector('.endpoint').textContent;
                     const method = this.querySelector('.method').textContent;
                     
@@ -329,6 +444,39 @@
                         });
                     }
                 });
+            });
+
+            // Handle accordion functionality
+            const accordionHeaders = document.querySelectorAll('.parameters h4');
+            
+            accordionHeaders.forEach(header => {
+                header.addEventListener('click', function(e) {
+                    e.stopPropagation(); // Prevent card click event
+                    
+                    const content = this.nextElementSibling;
+                    const isCollapsed = content.classList.contains('collapsed');
+                    
+                    if (isCollapsed) {
+                        // Expand
+                        content.classList.remove('collapsed');
+                        this.classList.remove('collapsed');
+                    } else {
+                        // Collapse
+                        content.classList.add('collapsed');
+                        this.classList.add('collapsed');
+                    }
+                });
+            });
+
+            // Initialize some sections as collapsed by default
+            const sectionsToCollapse = ['Error Response (500)', 'Example Response', 'Sample JSON Response'];
+            
+            accordionHeaders.forEach(header => {
+                if (sectionsToCollapse.includes(header.textContent)) {
+                    const content = header.nextElementSibling;
+                    content.classList.add('collapsed');
+                    header.classList.add('collapsed');
+                }
             });
         });
     </script>
