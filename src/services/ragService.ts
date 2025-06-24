@@ -112,9 +112,9 @@ export class RAGService {
       const sources = searchResults.map(result => ({
         documentId: result.documentId,
         filename: result.filename,
-        content: result.content.substring(0, 200) + "...", // Truncate for display
+        // content: result.content.substring(0, 200) + "...", // Truncate for display
         score: result.score,
-        metadata: result.metadata,
+        // metadata: result.metadata,
       }));
 
       // Store the conversation with context missing flag
