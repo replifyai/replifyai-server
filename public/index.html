@@ -203,7 +203,7 @@
     <div class="container">
         <div class="header">
             <h1>🔍 Intelligent Document Analyzer API</h1>
-            <p>Backend API for document processing, analysis, and RAG-powered chat</p>
+            <p>Backend API for document processing, analysis, batch uploads, and RAG-powered chat</p>
             <span class="status-badge">LIVE</span>
         </div>
 
@@ -381,7 +381,6 @@
                 </div>
             </div>
 
-
             <!-- Stats API -->
             <div class="api-card get">
                 <span class="method get">GET</span>
@@ -403,6 +402,242 @@
                             <li><strong>contextMissingQueries.byPriority:</strong> object</li>
                             <li><strong>qdrantStatus:</strong> "connected" | "disconnected"</li>
                             <li><strong>openaiStatus:</strong> "connected" | "not configured"</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/documents/upload-url</div>
+                <div class="description">
+                    Upload a document from a URL (including Google Drive links) for processing and indexing.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>url:</strong> string (required) - URL to PDF document</li>
+                            <li><strong>name:</strong> string (optional) - Custom name for the document</li>
+                            <li><strong>Supported URLs:</strong> Direct PDF links, Google Drive share links</li>
+                            <li><strong>Max size:</strong> 10MB</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Success (200):</strong> Returns the fully processed document</li>
+                            <li><strong>metadata.sourceUrl:</strong> string - Original URL</li>
+                            <li><strong>metadata.uploadType:</strong> "url"</li>
+                            <li><strong>metadata.isGoogleDrive:</strong> boolean</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Upload APIs -->
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/documents/batch-upload-urls</div>
+                <div class="description">
+                    Upload multiple documents from URLs in batch mode with queue processing. Handles hundreds of PDFs without server timeouts.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>urls:</strong> Array&lt;string | object&gt; (required)</li>
+                            <li><strong>urls[].url:</strong> string - PDF URL (if object format)</li>
+                            <li><strong>urls[].name:</strong> string - Custom name (if object format)</li>
+                            <li><strong>concurrency:</strong> number (default: 3) - Simultaneous uploads</li>
+                            <li><strong>retryAttempts:</strong> number (default: 2) - Retry failed uploads</li>
+                            <li><strong>Max URLs:</strong> 100 per batch</li>
+                            <li><strong>Supported:</strong> PDF URLs, Google Drive links</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>jobId:</strong> string - Unique batch job identifier</li>
+                            <li><strong>message:</strong> string - Confirmation message</li>
+                            <li><strong>totalItems:</strong> number - Number of URLs to process</li>
+                            <li><strong>status:</strong> "pending" - Initial job status</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Example Request</h4>
+                    <div class="parameters-content">
+                        <pre style="background: #f1f3f4; padding: 15px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; color: #333;">
+{
+  "urls": [
+    "https://example.com/doc1.pdf",
+    "https://drive.google.com/file/d/FILE_ID/view",
+    {
+      "url": "https://example.com/doc2.pdf",
+      "name": "Custom Document Name"
+    }
+  ],
+  "concurrency": 5,
+  "retryAttempts": 3
+}</pre>
+                    </div>
+                </div>
+            </div>
+
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/documents/batch-upload-files</div>
+                <div class="description">
+                    Upload multiple files directly in batch mode with queue processing. Perfect for bulk document uploads.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>files:</strong> Array&lt;File&gt; (required) - Multiple files</li>
+                            <li><strong>concurrency:</strong> number (default: 3) - Simultaneous uploads</li>
+                            <li><strong>retryAttempts:</strong> number (default: 2) - Retry failed uploads</li>
+                            <li><strong>Max files:</strong> 100 per batch</li>
+                            <li><strong>Supported types:</strong> PDF, DOCX, TXT</li>
+                            <li><strong>Max size per file:</strong> 10MB</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>jobId:</strong> string - Unique batch job identifier</li>
+                            <li><strong>message:</strong> string - Confirmation message</li>
+                            <li><strong>totalItems:</strong> number - Number of files to process</li>
+                            <li><strong>status:</strong> "pending" - Initial job status</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/batch-jobs/:jobId</div>
+                <div class="description">
+                    Monitor the progress and status of a specific batch upload job with real-time updates.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>jobId:</strong> string - Batch job identifier (path parameter)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>id:</strong> string - Job identifier</li>
+                            <li><strong>status:</strong> "pending" | "processing" | "completed" | "failed" | "cancelled"</li>
+                            <li><strong>totalItems:</strong> number - Total documents in batch</li>
+                            <li><strong>completedItems:</strong> number - Successfully processed</li>
+                            <li><strong>failedItems:</strong> number - Failed to process</li>
+                            <li><strong>startTime:</strong> string - ISO timestamp when job started</li>
+                            <li><strong>endTime:</strong> string | null - ISO timestamp when job completed</li>
+                            <li><strong>concurrency:</strong> number - Configured concurrency level</li>
+                            <li><strong>retryAttempts:</strong> number - Configured retry attempts</li>
+                            <li><strong>items:</strong> Array&lt;BatchUploadItem&gt; - Individual item details</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>BatchUploadItem Structure</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>id:</strong> string - Item identifier</li>
+                            <li><strong>url:</strong> string | undefined - Source URL (if URL upload)</li>
+                            <li><strong>name:</strong> string | undefined - Custom name</li>
+                            <li><strong>status:</strong> "pending" | "processing" | "completed" | "failed"</li>
+                            <li><strong>error:</strong> string | undefined - Error message if failed</li>
+                            <li><strong>documentId:</strong> number | undefined - Created document ID</li>
+                            <li><strong>progress:</strong> number - Progress percentage (0-100)</li>
+                            <li><strong>startTime:</strong> Date | undefined - Processing start time</li>
+                            <li><strong>endTime:</strong> Date | undefined - Processing end time</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Example Response</h4>
+                    <div class="parameters-content">
+                        <pre style="background: #f1f3f4; padding: 15px; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; color: #333;">
+{
+  "id": "batch_1735659370433_abc123",
+  "status": "processing",
+  "totalItems": 50,
+  "completedItems": 32,
+  "failedItems": 3,
+  "startTime": "2024-01-15T10:00:00Z",
+  "endTime": null,
+  "concurrency": 3,
+  "retryAttempts": 2,
+  "items": [
+    {
+      "id": "batch_1735659370433_abc123_item_0",
+      "url": "https://example.com/doc1.pdf",
+      "status": "completed",
+      "documentId": 42,
+      "progress": 100,
+      "startTime": "2024-01-15T10:00:05Z",
+      "endTime": "2024-01-15T10:00:25Z"
+    }
+  ]
+}</pre>
+                    </div>
+                </div>
+            </div>
+
+            <div class="api-card get">
+                <span class="method get">GET</span>
+                <div class="endpoint">/api/batch-jobs</div>
+                <div class="description">
+                    Get a list of all batch upload jobs with their current status and progress information.
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Array of BatchUploadJob:</strong> All batch jobs</li>
+                            <li><strong>Sorted by:</strong> Creation time (newest first)</li>
+                            <li><strong>Includes:</strong> All job statuses (pending, processing, completed, failed, cancelled)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="api-card post">
+                <span class="method post">POST</span>
+                <div class="endpoint">/api/batch-jobs/:jobId/cancel</div>
+                <div class="description">
+                    Cancel a running or pending batch upload job. Already processed items remain in the system.
+                </div>
+                <div class="parameters">
+                    <h4>Parameters</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>jobId:</strong> string - Batch job identifier (path parameter)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="parameters">
+                    <h4>Response</h4>
+                    <div class="parameters-content">
+                        <ul class="param-list">
+                            <li><strong>Success (200):</strong> { "message": "Batch job cancelled successfully" }</li>
+                            <li><strong>Error (400):</strong> Job cannot be cancelled or not found</li>
+                            <li><strong>Note:</strong> Completed jobs cannot be cancelled</li>
+                            <li><strong>Effect:</strong> Pending items marked as failed, processing items continue</li>
                         </ul>
                     </div>
                 </div>
