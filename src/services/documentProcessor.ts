@@ -58,7 +58,7 @@ export class DocumentProcessor {
     qualityThreshold: 0.9
   };
 
-  async processDocument(document: Document, fileBuffer: Buffer): Promise<void> {
+  async processDocument(document: Document, fileBuffer: Buffer, sourceUrl?: string): Promise<void> {
     try {
       // Update status to processing
       await storage.updateDocumentStatus(document.id, "processing");
@@ -103,7 +103,9 @@ export class DocumentProcessor {
           strategy: strategy.name,
           docMetadata,
           documentSummary: aiChunkingResult.documentSummary,
-          documentType: aiChunkingResult.documentType
+          documentType: aiChunkingResult.documentType,
+          sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl, // Include source URL if available
+          uploadType: (document.metadata as any)?.uploadType || 'file'
         }
       }));
       console.log("🚀 ~ DocumentProcessor ~ processedChunks ~ processedChunks:", JSON.stringify(processedChunks, null, 2));

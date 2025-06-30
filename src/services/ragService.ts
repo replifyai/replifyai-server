@@ -19,6 +19,8 @@ export interface RAGResponse {
     content: string;
     score: number;
     metadata?: any;
+    sourceUrl?: string;
+    uploadType?: string;
   }>;
   contextAnalysis: ContextMissingAnalysis;
 }
@@ -117,6 +119,8 @@ export class RAGService {
         score: result.score,
         // metadata: result.metadata,
         metadata: [],
+        sourceUrl: result.metadata?.sourceUrl,
+        uploadType: result.metadata?.uploadType,
       }));
 
       // Store the conversation with context missing flag
