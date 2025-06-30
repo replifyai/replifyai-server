@@ -4,6 +4,7 @@ import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
 import { ragService } from "./services/ragService.js";
+import { batchUploadService } from "./services/batchUploadService.js";
 import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
 
@@ -256,7 +257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await ragService.queryDocuments(message, {
-        retrievalCount: retrievalCount || 20,
+        retrievalCount: retrievalCount || 10,
         similarityThreshold: similarityThreshold ||  0.75,
       });
 
@@ -354,6 +355,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(setting);
     } catch (error) {
       res.status(400).json({ message: (error as Error).message });
+    }
+  });
+
+  // Batch upload from URLs
+  app.post("/api/documents/batch-upload-urls", async (req, res) => {
+    try {
+      const { urls, concurrency, retryAttempts } = req.body;
+      
+      if (!urls || !Array.isArray(urls) || urls.length === 0) {
+        return res.status(400).json({ message: "URLs array is required and cannot be empty" });
+      }
+
+      if (urls.length > 100) {
+        return res.status(400).json({ message: "Maximum 100 URLs allowed per batch" });
+      }
+
+      console.log(`Creating batch upload job for ${urls.length} URLs`);
+
+      // Validate URLs
+      const items = urls.map((item: any, index: number) => {
+        if (typeof item === 'string') {
+          return { url: item };
+        } else if (item.url) {
+          return { url: item.url, name: item.name };
+        } else {
+          throw new Error(`Invalid URL format at index ${index}`);
+        }
+      });
+
+      // Create batch job
+      const jobId = await batchUploadService.createBatchJob(items, {
+        concurrency: concurrency || 3,
+        retryAttempts: retryAttempts || 2
+      });
+
+      res.json({
+        jobId,
+        message: `Batch upload job created with ${urls.length} URLs`,
+        totalItems: urls.length,
+        status: 'pending'
+      });
+
+    } catch (error) {
+      console.error('Batch URL upload error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Batch upload files
+  app.post("/api/documents/batch-upload-files", upload.array("files", 100), async (req, res) => {
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ message: "No files uploaded" });
+      }
+
+      const files = req.files as Express.Multer.File[];
+      const { concurrency, retryAttempts } = req.body;
+
+      console.log(`Creating batch upload job for ${files.length} files`);
+
+      // Prepare file items
+      const items = files.map(file => {
+        let fileType = 'unknown';
+        if (file.mimetype === 'application/pdf') fileType = 'pdf';
+        else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') fileType = 'docx';
+        else if (file.mimetype === 'text/plain') fileType = 'txt';
+
+        return {
+          file: {
+            buffer: file.buffer,
+            originalName: file.originalname,
+            fileType,
+            fileSize: file.size
+          }
+        };
+      });
+
+      // Create batch job
+      const jobId = await batchUploadService.createBatchJob(items, {
+        concurrency: parseInt(concurrency) || 3,
+        retryAttempts: parseInt(retryAttempts) || 2
+      });
+
+      res.json({
+        jobId,
+        message: `Batch upload job created with ${files.length} files`,
+        totalItems: files.length,
+        status: 'pending'
+      });
+
+    } catch (error) {
+      console.error('Batch file upload error:', error);
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Get batch job status
+  app.get("/api/batch-jobs/:jobId", async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const job = batchUploadService.getJobStatus(jobId);
+      
+      if (!job) {
+        return res.status(404).json({ message: "Batch job not found" });
+      }
+
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Get all batch jobs
+  app.get("/api/batch-jobs", async (req, res) => {
+    try {
+      const jobs = batchUploadService.getAllJobs();
+      res.json(jobs);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Cancel batch job
+  app.post("/api/batch-jobs/:jobId/cancel", async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const cancelled = batchUploadService.cancelJob(jobId);
+      
+      if (!cancelled) {
+        return res.status(400).json({ message: "Job cannot be cancelled or not found" });
+      }
+
+      res.json({ message: "Batch job cancelled successfully" });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
     }
   });
 

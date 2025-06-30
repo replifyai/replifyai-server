@@ -71,7 +71,7 @@ class QdrantCloudService {
   async ensureCollection(): Promise<void> {
     try {
       console.log(`Checking if collection '${this.collectionName}' exists...`);
-      await this.request(`/collections/${this.collectionName}`);
+      // await this.request(`/collections/${this.collectionName}`);
       console.log(`Collection '${this.collectionName}' exists.`);
     } catch (error) {
       console.log(`Collection '${this.collectionName}' does not exist. Creating...`);
