@@ -5,8 +5,9 @@ import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
 import { ragService } from "./services/ragService.js";
 import { batchUploadService } from "./services/batchUploadService.js";
-import { insertDocumentSchema, insertSettingSchema } from "../shared/schema.js";
+import { insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
+import { generateQuiz, evaluateQuiz } from './quiz/index.js';
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -488,6 +489,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ message: "Batch job cancelled successfully" });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Generate a quiz
+  app.post("/api/quiz", async (req, res) => {
+    try {
+      const quiz = await generateQuiz(req.body);
+      res.json(quiz);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Evaluate quiz answers
+  app.post("/api/quiz/evaluate", async (req, res) => {
+    try {
+      const result = evaluateQuiz(req.body);
+      res.json(result);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }
