@@ -296,7 +296,7 @@ CRITICAL INSTRUCTIONS:
 2. If the user asks about "${queryAnalysis.entityType} ${queryAnalysis.attributeType}", provide ONLY that specific information
 3. Ignore any information about conflicting entities: ${queryAnalysis.conflictingTerms.join(', ')}
 4. If the context contains both relevant and conflicting information, clearly distinguish and provide only the relevant information
-5. If the context doesn't contain the SPECIFIC information requested, say "I don't have information about ${queryAnalysis.entityType} ${queryAnalysis.attributeType} in the uploaded documents."
+5. If the context doesn't contain the SPECIFIC information requested, say "I don't have enough information about ${queryAnalysis.entityType} ${queryAnalysis.attributeType} in the uploaded documents."
 
 GENERAL RULES:
 1. Only use information from the provided context
@@ -352,7 +352,6 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
     if (!isContextMissing) {
       return {
         isContextMissing: false,
-        // confidence: 0,
         suggestedTopics: [],
         category: 'answered',
         priority: 'low'
@@ -364,7 +363,6 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
     return {
       isContextMissing: true,
-      // confidence: this.calculateConfidence(detectedPatterns),
       suggestedTopics: analysis.suggestedTopics,
       category: analysis.category,
       priority: analysis.priority
