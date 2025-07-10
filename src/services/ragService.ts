@@ -64,7 +64,6 @@ export class RAGService {
 
         // Analyze this response for context missing
         const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
-
         console.log(`No search results for query: "${query}" - Category: ${contextAnalysis.category}`);
 
         return {
@@ -266,7 +265,6 @@ Examples:
       'product specifications': ['packaging', 'shipping', 'delivery'],
       'shipping specifications': ['product', 'technical', 'device'],
     };
-
     return conflicts[term] || [];
   }
 
