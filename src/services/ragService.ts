@@ -61,10 +61,10 @@ export class RAGService {
 
       if (searchResults.length === 0) {
         const noResultsResponse = "I don't have enough information in the uploaded documents to answer this question. Please try uploading relevant documents first.";
-        
+
         // Analyze this response for context missing
         const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
-        
+
         console.log(`No search results for query: "${query}" - Category: ${contextAnalysis.category}`);
 
         return {
@@ -80,39 +80,44 @@ export class RAGService {
 
       // Filter and rank chunks based on query specificity
       const filteredChunks = await this.filterAndRankChunks(query, searchResults);
-      
+
       console.log(`🔍 RAG Query: "${query}"`);
       console.log(`📊 Original chunks: ${searchResults.length}, Filtered chunks: ${filteredChunks.length}`);
-      console.log(`📈 Top 3 chunks by context score:`, filteredChunks.slice(0, 3).map(chunk => ({
+      console.log(`📈 Top 3 chunks by Qdrant similarity score:`, filteredChunks.slice(0, 3).map(chunk => ({
         filename: chunk.filename,
-        originalScore: chunk.originalScore?.toFixed(3),
-        relevanceScore: chunk.relevanceScore?.toFixed(3),
-        contextScore: chunk.contextScore?.toFixed(3),
+        similarityScore: chunk.originalScore?.toFixed(3),
         entityType: chunk.contextAnalysis?.entityType,
         attributeType: chunk.contextAnalysis?.attributeType,
         preview: chunk.content.substring(0, 100) + '...'
       })));
-      
-      // Prepare context from filtered search results
-      const contextChunks = filteredChunks.map(result => 
-        `[From: ${result.filename}]\n${result.content}`
-      );
+
+      // Prepare context from filtered search results with chunk IDs
+      const contextChunks = filteredChunks.map((result, index) => ({
+        id: `chunk_${index}`,
+        content: `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`,
+        originalData: result
+      }));
 
       // Generate response using OpenAI with enhanced context awareness
-      const response = await this.generateContextAwareResponse(query, contextChunks);
+      const responseData = await this.generateContextAwareResponse(query, contextChunks);
 
       // Analyze response for missing context
-      const contextAnalysis = this.analyzeForMissingContext(query, response);
+      const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
 
-      // Prepare sources information
-      const sources = filteredChunks.map(result => ({
-        documentId: result.documentId,
-        filename: result.filename,
+      // Filter sources to only include chunks that were actually used
+      const usedChunks = contextChunks.filter(chunk => 
+        responseData.usedChunkIds.includes(chunk.id)
+      );
+
+      // Prepare sources information from only the used chunks
+      const sources = usedChunks.map(chunk => ({
+        documentId: chunk.originalData.documentId,
+        filename: chunk.originalData.filename,
         content: '',
-        score: result.score,
+        score: chunk.originalData.score,
         metadata: [],
-        sourceUrl: result.metadata?.sourceUrl,
-        uploadType: result.metadata?.uploadType,
+        sourceUrl: chunk.originalData.metadata?.sourceUrl,
+        uploadType: chunk.originalData.metadata?.uploadType,
       }));
 
       // If context is missing, store the analysis for analytics
@@ -120,9 +125,11 @@ export class RAGService {
         console.log(`Context missing detected for query: "${query}" - Category: ${contextAnalysis.category}`);
       }
 
+      console.log(`📚 Used ${usedChunks.length} out of ${filteredChunks.length} chunks for response`);
+
       return {
         query,
-        response,
+        response: responseData.response,
         sources,
         contextAnalysis,
       };
@@ -139,30 +146,20 @@ export class RAGService {
   private async filterAndRankChunks(query: string, searchResults: any[]): Promise<any[]> {
     // Use AI to analyze query intent and context requirements
     const queryAnalysis = await this.analyzeQueryIntent(query);
-    
-    console.log(`🧠 Query Analysis:`, queryAnalysis);
-    
-    // Score chunks based on AI-analyzed context relevance
-    const scoredChunks = await Promise.all(
-      searchResults.map(async (chunk) => {
-        const contextRelevanceScore = await this.calculateContextRelevance(
-          query,
-          chunk.content,
-          queryAnalysis
-        );
-        
-        return {
-          ...chunk,
-          contextScore: chunk.score + contextRelevanceScore,
-          originalScore: chunk.score,
-          relevanceScore: contextRelevanceScore,
-          contextAnalysis: queryAnalysis
-        };
-      })
-    );
 
-    // Sort by context score and return top results
-    return scoredChunks
+    console.log(`🧠 Query Analysis:`, queryAnalysis);
+
+    // Use Qdrant's similarity scores directly instead of expensive AI relevance scoring
+    const rankedChunks = searchResults.map((chunk) => ({
+      ...chunk,
+      contextScore: chunk.score, // Use Qdrant's similarity score directly
+      originalScore: chunk.score,
+      relevanceScore: 0, // No additional AI-based relevance scoring
+      contextAnalysis: queryAnalysis
+    }));
+
+    // Sort by Qdrant's similarity score and return top results
+    return rankedChunks
       .sort((a, b) => b.contextScore - a.contextScore)
       .slice(0, 10); // Limit to top 10 most relevant chunks
   }
@@ -250,76 +247,9 @@ Examples:
     chunkContent: string,
     queryAnalysis: any
   ): Promise<number> {
-    try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert content relevance analyzer. Your task is to determine how well a piece of content matches a specific query intent.
-
-Given:
-- User's query
-- Query analysis (intent, entity type, attribute type, etc.)
-- Content chunk
-
-Analyze and return a JSON object with:
-{
-  "relevanceScore": 0.0-1.0,
-  "reasoning": "Brief explanation of relevance",
-  "hasConflictingInfo": true/false,
-  "matchesIntent": true/false,
-  "contextAlignment": 0.0-1.0
-}
-
-Scoring guidelines:
-- 1.0: Perfect match, exactly what user is looking for
-- 0.8-0.9: Very relevant, contains requested information
-- 0.6-0.7: Somewhat relevant, related information
-- 0.4-0.5: Marginally relevant, tangentially related
-- 0.0-0.3: Not relevant or conflicting information
-
-Pay special attention to:
-- Exact matches for entity type (product vs packaging)
-- Exact matches for attribute type (dimensions vs weight)
-- Presence of conflicting information
-- Context alignment with user's specific intent`
-          },
-          {
-            role: "user",
-            content: `Query: "${query}"
-
-Query Analysis:
-${JSON.stringify(queryAnalysis, null, 2)}
-
-Content Chunk:
-${chunkContent.substring(0, 800)}...`
-          }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-        max_tokens: 300,
-      });
-
-      const result = JSON.parse(response.choices[0].message.content || '{}');
-      
-      // Convert relevance score to adjustment value (-0.5 to +0.5)
-      const baseScore = result.relevanceScore || 0.5;
-      const hasConflict = result.hasConflictingInfo || false;
-      const matchesIntent = result.matchesIntent || false;
-      
-      let adjustmentScore = (baseScore - 0.5); // -0.5 to +0.5
-      
-      // Apply penalties and bonuses
-      if (hasConflict) adjustmentScore -= 0.3;
-      if (matchesIntent && baseScore > 0.8) adjustmentScore += 0.2;
-      
-      return Math.max(-0.5, Math.min(0.5, adjustmentScore));
-      
-    } catch (error) {
-      console.error('Context relevance calculation failed:', error);
-      return 0; // Neutral score on error
-    }
+    // This method is now deprecated - we rely on Qdrant's retrieval strategy
+    // Keeping for backward compatibility but always returns 0
+    return 0;
   }
 
   /**
@@ -336,17 +266,24 @@ ${chunkContent.substring(0, 800)}...`
       'product specifications': ['packaging', 'shipping', 'delivery'],
       'shipping specifications': ['product', 'technical', 'device'],
     };
-    
+
     return conflicts[term] || [];
   }
 
   /**
    * Generate context-aware response with AI-powered disambiguation
    */
-  private async generateContextAwareResponse(query: string, contextChunks: string[]): Promise<string> {
+  private async generateContextAwareResponse(query: string, contextChunks: Array<{
+    id: string;
+    content: string;
+    originalData: any;
+  }>): Promise<{
+    response: string;
+    usedChunkIds: string[];
+  }> {
     // Get query analysis for enhanced prompting
     const queryAnalysis = await this.analyzeQueryIntent(query);
-    
+
     const systemPrompt = `You are a helpful AI assistant that answers questions based ONLY on the provided context from uploaded documents. 
 
 QUERY ANALYSIS:
@@ -370,8 +307,11 @@ GENERAL RULES:
 4. Do not make up or infer information not present in the context
 5. If multiple types of information are present, clearly specify which type you're providing
 
+IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]
+You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chunk_0] [USED_CHUNK: chunk_1]
+
 Context from uploaded documents:
-${contextChunks.join('\n\n---\n\n')}`;
+${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -383,7 +323,25 @@ ${contextChunks.join('\n\n---\n\n')}`;
       max_tokens: 1000,
     });
 
-    return response.choices[0].message.content || "I couldn't generate a response.";
+    const responseText = response.choices[0].message.content || "I couldn't generate a response.";
+
+    // Extract used chunk IDs from the response
+    const usedChunkIds: string[] = [];
+    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+    let match;
+    while ((match = chunkIdPattern.exec(responseText)) !== null) {
+      if (!usedChunkIds.includes(match[1])) {
+        usedChunkIds.push(match[1]);
+      }
+    }
+
+    // Clean up the response by removing the chunk ID markers
+    const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
+
+    return {
+      response: cleanResponse,
+      usedChunkIds,
+    };
   }
 
   /**
@@ -420,7 +378,7 @@ ${contextChunks.join('\n\n---\n\n')}`;
    */
   private getDetectedPatterns(response: string): string[] {
     const detectedPatterns: string[] = [];
-    
+
     for (const pattern of this.MISSING_CONTEXT_PATTERNS) {
       if (pattern.test(response)) {
         detectedPatterns.push(pattern.source);
