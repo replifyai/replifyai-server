@@ -74,3 +74,5 @@ export async function extractDocumentMetadata(text: string, filename: string): P
     return { categories: [], topics: [], document_type: "unknown", key_entities: [] };
   }
 }
+
+export { openai };

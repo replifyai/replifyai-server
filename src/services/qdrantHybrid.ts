@@ -73,6 +73,38 @@ class QdrantCloudService {
       console.log(`Checking if collection '${this.collectionName}' exists...`);
       // await this.request(`/collections/${this.collectionName}`);
       console.log(`Collection '${this.collectionName}' exists.`);
+      
+      // Check if keyTopics index exists, if not create it
+      try {
+        await this.request(`/collections/${this.collectionName}/index/metadata.keyTopics`);
+        console.log(`Index for metadata.keyTopics already exists.`);
+      } catch (indexError) {
+        console.log(`Creating index for metadata.keyTopics...`);
+        await this.request(`/collections/${this.collectionName}/index`, {
+          method: "PUT",
+          body: JSON.stringify({
+            field_name: "metadata.keyTopics",
+            field_schema: "keyword"
+          }),
+        });
+        console.log(`Index for metadata.keyTopics created successfully.`);
+      }
+      
+      // Check if product_name index exists, if not create it
+      try {
+        await this.request(`/collections/${this.collectionName}/index/metadata.docMetadata.key_entities.product_name`);
+        console.log(`Index for metadata.docMetadata.key_entities.product_name already exists.`);
+      } catch (indexError) {
+        console.log(`Creating index for metadata.docMetadata.key_entities.product_name...`);
+        await this.request(`/collections/${this.collectionName}/index`, {
+          method: "PUT",
+          body: JSON.stringify({
+            field_name: "metadata.docMetadata.key_entities.product_name",
+            field_schema: "keyword"
+          }),
+        });
+        console.log(`Index for metadata.docMetadata.key_entities.product_name created successfully.`);
+      }
     } catch (error) {
       console.log(`Collection '${this.collectionName}' does not exist. Creating...`);
       await this.request(`/collections/${this.collectionName}`, {
@@ -85,6 +117,28 @@ class QdrantCloudService {
         }),
       });
       console.log(`Collection '${this.collectionName}' created successfully.`);
+      
+      // Create index for metadata.keyTopics after collection creation
+      console.log(`Creating index for metadata.keyTopics...`);
+      await this.request(`/collections/${this.collectionName}/index`, {
+        method: "PUT",
+        body: JSON.stringify({
+          field_name: "metadata.keyTopics",
+          field_schema: "keyword"
+        }),
+      });
+      console.log(`Index for metadata.keyTopics created successfully.`);
+      
+      // Create index for metadata.docMetadata.key_entities.product_name after collection creation
+      console.log(`Creating index for metadata.docMetadata.key_entities.product_name...`);
+      await this.request(`/collections/${this.collectionName}/index`, {
+        method: "PUT",
+        body: JSON.stringify({
+          field_name: "metadata.docMetadata.key_entities.product_name",
+          field_schema: "keyword"
+        }),
+      });
+      console.log(`Index for metadata.docMetadata.key_entities.product_name created successfully.`);
     }
   }
 
@@ -210,6 +264,110 @@ export class QdrantService {
       ...result,
       backend: "qdrant-cloud"
     };
+  }
+
+  async getChunksByProductsOrTopics(products: string[],topics: string[]): Promise<SearchResult[]> {
+    await this.cloudService.ensureCollection();
+    
+    // Create filter for product names - find chunks where product_name matches any of the provided products
+    const filter = {
+      should: [
+        ...products.map(product => ({
+          key: "metadata.docMetadata.key_entities.product_name",
+          match: { value: product }
+        })),
+        ...topics.map(topic => ({
+          key: "metadata.docMetadata.topics",
+          match: { value: topic }
+        }))
+      ]
+    };
+    
+    let allResults: SearchResult[] = [];
+    let offset = 0;
+    const limit = 30;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const response = await this.cloudService["request"](`/collections/${this.cloudService["collectionName"]}/points/scroll`, {
+        method: "POST",
+        body: JSON.stringify({
+          filter,
+          limit,
+          offset,
+          with_payload: true,
+        }),
+      });
+      
+      const results = (response.result?.points || []).map((point: any) => ({
+        chunkId: point.id,
+        documentId: point.payload.documentId,
+        content: point.payload.content,
+        filename: point.payload.filename,
+        score: 1,
+        metadata: point.payload.metadata,
+      }));
+      
+      allResults = allResults.concat(results);
+      
+      if (results.length < limit) {
+        hasMore = false;
+      } else {
+        offset += limit;
+      }
+    }
+    
+    return allResults;
+  }
+
+  async getChunksByProductName(productName: string): Promise<SearchResult[]> {
+    await this.cloudService.ensureCollection();
+    
+    // Create filter for exact product name match
+    const filter = {
+      must: [
+        {
+          key: "metadata.docMetadata.key_entities.product_name",
+          match: { value: productName }
+        }
+      ]
+    };
+    
+    let allResults: SearchResult[] = [];
+    let offset = 0;
+    const limit = 100;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const response = await this.cloudService["request"](`/collections/${this.cloudService["collectionName"]}/points/scroll`, {
+        method: "POST",
+        body: JSON.stringify({
+          filter,
+          limit,
+          offset,
+          with_payload: true,
+        }),
+      });
+      
+      const results = (response.result?.points || []).map((point: any) => ({
+        chunkId: point.id,
+        documentId: point.payload.documentId,
+        content: point.payload.content,
+        filename: point.payload.filename,
+        score: 1,
+        metadata: point.payload.metadata,
+      }));
+      
+      allResults = allResults.concat(results);
+      
+      if (results.length < limit) {
+        hasMore = false;
+      } else {
+        offset += limit;
+      }
+    }
+    
+    return allResults;
   }
 }
 
