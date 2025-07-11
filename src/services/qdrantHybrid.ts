@@ -277,7 +277,7 @@ export class QdrantService {
           match: { value: product }
         })),
         ...topics.map(topic => ({
-          key: "metadata.docMetadata.topics",
+          key: "metadata.keyTopics",
           match: { value: topic }
         }))
       ]
