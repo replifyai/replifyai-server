@@ -6,7 +6,7 @@ import {
   QuizQuestion,
 } from './quizTypes.js';
 
-export async function generateQuiz({ products, count = 5, type = 'mcq',topics }: { products?: string[], count?: number, type?: string,topics?: string[] }): Promise<QuizGenerationResponse> {
+export async function generateQuiz({ products, count = 10, type = 'mcq',topics }: { products?: string[], count?: number, type?: string,topics?: string[] }): Promise<QuizGenerationResponse> {
   // if (!products || !Array.isArray(products) || products.length === 0) {
   //   throw new Error('No products provided for quiz generation.');
   // }
