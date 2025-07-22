@@ -148,14 +148,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Process document with URL reference
         await Promise.race([
           documentProcessor.processDocument(document, buffer, url),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Document processing timeout')), env.API_TIMEOUT)
-          )
+          // new Promise((_, reject) => 
+          //   setTimeout(() => reject(new Error('Document processing timeout')), env.API_TIMEOUT)
+          // )
         ]);
         
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
-        
+        await storage.deleteDocument(document.id);
         res.json(processedDocument);
       } catch (processingError) {
         console.error(`Failed to process document ${document.id}:`, processingError);
