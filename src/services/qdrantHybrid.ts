@@ -105,6 +105,20 @@ class QdrantCloudService {
         });
         console.log(`Index for metadata.docMetadata.key_entities.product_name created successfully.`);
       }
+      try {
+        await this.request(`/collections/${this.collectionName}/index/metadata.productName`);
+        console.log(`Index for metadata.productName already exists.`);
+      } catch (indexError) {
+        console.log(`Creating index for metadata.productName...`);
+        await this.request(`/collections/${this.collectionName}/index`, {
+          method: "PUT",
+          body: JSON.stringify({
+            field_name: "metadata.productName",
+            field_schema: "keyword"
+          }),
+        });
+        console.log(`Index for metadata.productName created successfully.`);
+      }
     } catch (error) {
       console.log(`Collection '${this.collectionName}' does not exist. Creating...`);
       await this.request(`/collections/${this.collectionName}`, {
@@ -181,20 +195,34 @@ class QdrantCloudService {
   async searchSimilar(
     queryVector: number[], 
     limit: number = 5, 
-    scoreThreshold: number = 0.7
+    scoreThreshold: number = 0.7,
+    productName?: string
   ): Promise<SearchResult[]> {
+    console.log("🚀 ~ QdrantCloudService ~ productName:", productName);
     await this.ensureCollection();
-
+    
+    const searchBody: any = {
+      vector: queryVector,
+      limit,
+      score_threshold: scoreThreshold,
+      with_payload: true,
+    };
+    
+    // Only add filter if productName is provided and not empty
+    if (productName && productName.trim() !== '') {
+      searchBody.filter = {
+        must: [
+          { key: "metadata.productName", match: { value: productName } }
+        ]
+      };
+    }
+    
     const response = await this.request(`/collections/${this.collectionName}/points/search`, {
       method: "POST",
-      body: JSON.stringify({
-        vector: queryVector,
-        limit,
-        score_threshold: scoreThreshold,
-        with_payload: true,
-      }),
+      body: JSON.stringify(searchBody),
     });
 
+    console.log("🚀 ~ QdrantCloudService ~ returnresponse.result.map ~ response:", JSON.stringify(response, null, 2));
     return response.result.map((result: any) => ({
       chunkId: result.id,
       documentId: result.payload.documentId,
@@ -249,9 +277,10 @@ export class QdrantService {
   async searchSimilar(
     queryVector: number[], 
     limit: number = 5, 
-    scoreThreshold: number = 0.7
+    scoreThreshold: number = 0.7,
+    productName?: string
   ): Promise<SearchResult[]> {
-    return await this.cloudService.searchSimilar(queryVector, limit, scoreThreshold);
+    return await this.cloudService.searchSimilar(queryVector, limit, scoreThreshold, productName);
   }
 
   async deleteByDocumentId(documentId: number): Promise<void> {
@@ -273,7 +302,7 @@ export class QdrantService {
     const filter = {
       should: [
         ...products.map(product => ({
-          key: "metadata.docMetadata.key_entities.product_name",
+          key: "metadata.productName",
           match: { value: product }
         })),
         ...topics.map(topic => ({
@@ -327,7 +356,7 @@ export class QdrantService {
     const filter = {
       must: [
         {
-          key: "metadata.docMetadata.key_entities.product_name",
+          key: "metadata.productName",
           match: { value: productName }
         }
       ]

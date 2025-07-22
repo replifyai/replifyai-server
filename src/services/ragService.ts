@@ -45,9 +45,10 @@ export class RAGService {
   async queryDocuments(query: string, options: {
     retrievalCount?: number;
     similarityThreshold?: number;
+    productName?: string;
   } = {}): Promise<RAGResponse> {
-    const { retrievalCount = 20, similarityThreshold = 0.75 } = options;
-
+    const { retrievalCount = 20, similarityThreshold = 0.75, productName = "" } = options;
+    console.log("🚀 ~ RAGService ~ productName:", productName);
     try {
       // Create embedding for the query
       const queryEmbedding = await createEmbedding(query);
@@ -56,7 +57,8 @@ export class RAGService {
       const searchResults = await qdrantService.searchSimilar(
         queryEmbedding,
         retrievalCount,
-        similarityThreshold
+        similarityThreshold,
+        productName
       );
 
       if (searchResults.length === 0) {

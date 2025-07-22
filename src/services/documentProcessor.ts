@@ -94,6 +94,7 @@ export class DocumentProcessor {
         qualityScore: Math.min(aiChunk.importance / 10, 1), // Convert importance to quality score
         metadata: {
           filename: document.originalName,
+          productName: document.originalName,
           title: aiChunk.title,
           summary: aiChunk.summary,
           keyTopics: aiChunk.keyTopics,
@@ -148,7 +149,6 @@ export class DocumentProcessor {
       // Update document status
       await storage.updateDocumentStatus(document.id, "indexed", new Date());
       await storage.updateDocumentChunkCount(document.id, processedChunks.length);
-
     } catch (error) {
       console.error("Document processing failed:", error);
       await storage.updateDocumentStatus(document.id, "error");

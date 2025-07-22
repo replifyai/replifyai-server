@@ -210,7 +210,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
-        
+        await storage.deleteDocument(document.id);
         res.json(processedDocument);
       } catch (processingError) {
         // If processing fails, return error with document info
@@ -251,7 +251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Chat endpoint
   app.post("/api/chat", async (req, res) => {
     try {
-      const { message, retrievalCount, similarityThreshold } = req.body;
+      const { message, retrievalCount, similarityThreshold,productName="" } = req.body;
       
       if (!message) {
         return res.status(400).json({ message: "Message is required" });
@@ -260,6 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await ragService.queryDocuments(message, {
         retrievalCount: retrievalCount || 3,
         similarityThreshold: similarityThreshold ||  0.75,
+        productName:productName
       });
 
       res.json(result);
