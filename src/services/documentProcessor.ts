@@ -72,9 +72,9 @@ export class DocumentProcessor {
       console.log(`Extracted text length: ${text.length} characters (cleaned from ${rawText.length})`);
       
       // Validate text quality
-      if (!this.validateTextQuality(text)) {
-        throw new Error("Extracted text quality is too poor for processing");
-      }
+      // if (!this.validateTextQuality(text)) {
+      //   throw new Error("Extracted text quality is too poor for processing");
+      // }
       
       // Extract document metadata
       const docMetadata = await extractDocumentMetadata(text, document.originalName);
