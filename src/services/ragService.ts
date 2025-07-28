@@ -92,11 +92,20 @@ export class RAGService {
       })));
 
       // Prepare context from search results with chunk IDs
-      const contextChunks = sortedChunks.map((result, index) => ({
-        id: `chunk_${index}`,
-        content: `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`,
-        originalData: result
-      }));
+      const contextChunks = sortedChunks.map((result, index) => {
+        let contextContent = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
+        
+        // Add complete metadata if available
+        if (result.metadata) {
+          contextContent += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
+        }
+        
+        return {
+          id: `chunk_${index}`,
+          content: contextContent,
+          originalData: result
+        };
+      });
 
       // Generate response using OpenAI
       const responseData = await this.generateResponse(query, contextChunks);
