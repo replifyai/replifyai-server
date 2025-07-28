@@ -16,6 +16,9 @@ export const env = {
   // OpenAI
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR || '',
   
+  // Groq
+  GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+  
   // Qdrant
   QDRANT_URL: process.env.QDRANT_URL || 'https://qdrant.example.com',
   QDRANT_API_KEY: process.env.QDRANT_API_KEY || '',

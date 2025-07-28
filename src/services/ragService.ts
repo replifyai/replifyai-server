@@ -1,4 +1,5 @@
-import { createEmbedding, generateChatResponse, openai } from "./openai.js";
+import { createEmbedding, openai } from "./openai.js";
+import { generateGroqChatResponse } from "./groq.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 
@@ -160,7 +161,7 @@ export class RAGService {
   }
 
   /**
-   * Generate response with simplified context handling
+   * Generate response with simplified context handling using Groq
    */
   private async generateResponse(query: string, contextChunks: Array<{
     id: string;
@@ -185,6 +186,7 @@ You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chun
 Context from uploaded documents:
 ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
+    // Use Groq for generating the response
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -196,6 +198,12 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
     });
 
     const responseText = response.choices[0].message.content || "I couldn't generate a response.";
+
+    // const responseText = await generateGroqChatResponse(systemPrompt, query, {
+    //   model: "llama-3.1-8b-instant",
+    //   temperature: 0.1,
+    //   maxTokens: 1000,
+    // });
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
