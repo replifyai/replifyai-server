@@ -71,7 +71,7 @@ class QdrantCloudService {
   async ensureCollection(): Promise<void> {
     try {
       console.log(`Checking if collection '${this.collectionName}' exists...`);
-      // await this.request(`/collections/${this.collectionName}`);
+      await this.request(`/collections/${this.collectionName}`);
       console.log(`Collection '${this.collectionName}' exists.`);
       
       // Check if keyTopics index exists, if not create it
