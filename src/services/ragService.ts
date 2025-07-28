@@ -79,28 +79,27 @@ export class RAGService {
         };
       }
 
-      // Filter and rank chunks based on query specificity
-      const filteredChunks = await this.filterAndRankChunks(query, searchResults);
+      // Since we already have product-specific chunks from Qdrant, just sort by similarity score
+      const sortedChunks = searchResults
+        .sort((a, b) => b.score - a.score);
 
       console.log(`🔍 RAG Query: "${query}"`);
-      console.log(`📊 Original chunks: ${searchResults.length}, Filtered chunks: ${filteredChunks.length}`);
-      console.log(`📈 Top 3 chunks by Qdrant similarity score:`, filteredChunks.slice(0, 3).map(chunk => ({
+      console.log(`📊 Retrieved chunks: ${searchResults.length}`);
+      console.log(`📈 Top 3 chunks by Qdrant similarity score:`, sortedChunks.slice(0, 3).map(chunk => ({
         filename: chunk.filename,
-        similarityScore: chunk.originalScore?.toFixed(3),
-        entityType: chunk.contextAnalysis?.entityType,
-        attributeType: chunk.contextAnalysis?.attributeType,
+        similarityScore: chunk.score?.toFixed(3),
         preview: chunk.content.substring(0, 100) + '...'
       })));
 
-      // Prepare context from filtered search results with chunk IDs
-      const contextChunks = filteredChunks.map((result, index) => ({
+      // Prepare context from search results with chunk IDs
+      const contextChunks = sortedChunks.map((result, index) => ({
         id: `chunk_${index}`,
         content: `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`,
         originalData: result
       }));
 
-      // Generate response using OpenAI with enhanced context awareness
-      const responseData = await this.generateContextAwareResponse(query, contextChunks);
+      // Generate response using OpenAI
+      const responseData = await this.generateResponse(query, contextChunks);
 
       // Analyze response for missing context
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
@@ -110,23 +109,33 @@ export class RAGService {
         responseData.usedChunkIds.includes(chunk.id)
       );
 
-      // Prepare sources information from only the used chunks
-      const sources = usedChunks.map(chunk => ({
-        documentId: chunk.originalData.documentId,
-        filename: chunk.originalData.filename,
-        content: '',
-        score: chunk.originalData.score,
-        metadata: [],
-        sourceUrl: chunk.originalData.metadata?.sourceUrl,
-        uploadType: chunk.originalData.metadata?.uploadType,
-      }));
+      // Prepare sources information from only the used chunks, ensuring unique sourceUrls
+      const uniqueSourceUrls = new Set<string>();
+      const sources = usedChunks
+        .filter(chunk => {
+          const sourceUrl = chunk.originalData.metadata?.sourceUrl;
+          if (!sourceUrl || uniqueSourceUrls.has(sourceUrl)) {
+            return false;
+          }
+          uniqueSourceUrls.add(sourceUrl);
+          return true;
+        })
+        .map(chunk => ({
+          documentId: chunk.originalData.documentId,
+          filename: chunk.originalData.filename,
+          content: '',
+          score: chunk.originalData.score,
+          metadata: [],
+          sourceUrl: chunk.originalData.metadata?.sourceUrl,
+          uploadType: chunk.originalData.metadata?.uploadType,
+        }));
 
       // If context is missing, store the analysis for analytics
       if (contextAnalysis.isContextMissing) {
         console.log(`Context missing detected for query: "${query}" - Category: ${contextAnalysis.category}`);
       }
 
-      console.log(`📚 Used ${usedChunks.length} out of ${filteredChunks.length} chunks for response`);
+      console.log(`📚 Used ${usedChunks.length} out of ${sortedChunks.length} chunks for response`);
 
       return {
         query,
@@ -142,138 +151,9 @@ export class RAGService {
   }
 
   /**
-   * Filter and rank chunks based on query specificity and context relevance
+   * Generate response with simplified context handling
    */
-  private async filterAndRankChunks(query: string, searchResults: any[]): Promise<any[]> {
-    // Use AI to analyze query intent and context requirements
-    const queryAnalysis = await this.analyzeQueryIntent(query);
-
-    console.log(`🧠 Query Analysis:`, queryAnalysis);
-
-    // Use Qdrant's similarity scores directly instead of expensive AI relevance scoring
-    const rankedChunks = searchResults.map((chunk) => ({
-      ...chunk,
-      contextScore: chunk.score, // Use Qdrant's similarity score directly
-      originalScore: chunk.score,
-      relevanceScore: 0, // No additional AI-based relevance scoring
-      contextAnalysis: queryAnalysis
-    }));
-
-    // Sort by Qdrant's similarity score and return top results
-    return rankedChunks
-      .sort((a, b) => b.contextScore - a.contextScore)
-      .slice(0, 10); // Limit to top 10 most relevant chunks
-  }
-
-  /**
-   * Analyze query intent using AI to understand what the user is specifically looking for
-   */
-  private async analyzeQueryIntent(query: string): Promise<{
-    primaryIntent: string;
-    specificTerms: string[];
-    contextRequirements: string[];
-    conflictingTerms: string[];
-    entityType: string;
-    attributeType: string;
-  }> {
-    try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert query analyzer. Analyze the user's query to understand their specific intent and context requirements.
-
-Your task is to identify:
-1. What the user is primarily looking for (primary intent)
-2. Specific terms that must be present in relevant content
-3. Context requirements that content must satisfy
-4. Terms that would indicate conflicting or irrelevant content
-5. The type of entity they're asking about (product, package, service, etc.)
-6. The type of attribute they want (dimensions, weight, specifications, etc.)
-
-Return a JSON object with this structure:
-{
-  "primaryIntent": "Brief description of what user wants",
-  "specificTerms": ["term1", "term2"],
-  "contextRequirements": ["requirement1", "requirement2"],
-  "conflictingTerms": ["conflicting1", "conflicting2"],
-  "entityType": "product|package|service|document|general",
-  "attributeType": "dimensions|weight|specifications|price|features|general"
-}
-
-Examples:
-- "What are the product dimensions?" → entity: "product", attribute: "dimensions", conflicting: ["packaging", "box", "container"]
-- "What is the packaging weight?" → entity: "package", attribute: "weight", conflicting: ["product", "item", "device"]
-- "How much does shipping cost?" → entity: "service", attribute: "price", conflicting: ["product", "item"]`
-          },
-          {
-            role: "user",
-            content: query
-          }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-        max_tokens: 500,
-      });
-
-      const result = JSON.parse(response.choices[0].message.content || '{}');
-      return {
-        primaryIntent: result.primaryIntent || 'General information',
-        specificTerms: result.specificTerms || [],
-        contextRequirements: result.contextRequirements || [],
-        conflictingTerms: result.conflictingTerms || [],
-        entityType: result.entityType || 'general',
-        attributeType: result.attributeType || 'general'
-      };
-    } catch (error) {
-      console.error('Query intent analysis failed:', error);
-      // Fallback to basic analysis
-      return {
-        primaryIntent: 'General information',
-        specificTerms: [],
-        contextRequirements: [],
-        conflictingTerms: [],
-        entityType: 'general',
-        attributeType: 'general'
-      };
-    }
-  }
-
-  /**
-   * Calculate context relevance score using AI
-   */
-  private async calculateContextRelevance(
-    query: string,
-    chunkContent: string,
-    queryAnalysis: any
-  ): Promise<number> {
-    // This method is now deprecated - we rely on Qdrant's retrieval strategy
-    // Keeping for backward compatibility but always returns 0
-    return 0;
-  }
-
-  /**
-   * Get conflicting contexts for a specific term
-   */
-  private getConflictingContexts(term: string): string[] {
-    // This method is now deprecated in favor of AI-powered analysis
-    // Keeping for backward compatibility
-    const conflicts: Record<string, string[]> = {
-      'product dimensions': ['packaging', 'box', 'container', 'shipping'],
-      'packaging dimensions': ['product', 'item', 'device', 'unit'],
-      'product weight': ['packaging', 'box', 'container', 'shipping'],
-      'packaging weight': ['product', 'item', 'device', 'unit'],
-      'product specifications': ['packaging', 'shipping', 'delivery'],
-      'shipping specifications': ['product', 'technical', 'device'],
-    };
-    return conflicts[term] || [];
-  }
-
-  /**
-   * Generate context-aware response with AI-powered disambiguation
-   */
-  private async generateContextAwareResponse(query: string, contextChunks: Array<{
+  private async generateResponse(query: string, contextChunks: Array<{
     id: string;
     content: string;
     originalData: any;
@@ -281,31 +161,14 @@ Examples:
     response: string;
     usedChunkIds: string[];
   }> {
-    // Get query analysis for enhanced prompting
-    const queryAnalysis = await this.analyzeQueryIntent(query);
-
     const systemPrompt = `You are a helpful AI assistant that answers questions based ONLY on the provided context from uploaded documents. 
 
-QUERY ANALYSIS:
-Primary Intent: ${queryAnalysis.primaryIntent}
-Entity Type: ${queryAnalysis.entityType}
-Attribute Type: ${queryAnalysis.attributeType}
-Specific Terms Required: ${queryAnalysis.specificTerms.join(', ')}
-Conflicting Terms to Avoid: ${queryAnalysis.conflictingTerms.join(', ')}
-
-CRITICAL INSTRUCTIONS:
-1. Focus ONLY on information that matches the entity type "${queryAnalysis.entityType}" and attribute type "${queryAnalysis.attributeType}"
-2. If the user asks about "${queryAnalysis.entityType} ${queryAnalysis.attributeType}", provide ONLY that specific information
-3. Ignore any information about conflicting entities: ${queryAnalysis.conflictingTerms.join(', ')}
-4. If the context contains both relevant and conflicting information, clearly distinguish and provide only the relevant information
-5. If the context doesn't contain the SPECIFIC information requested, say "I don't have enough information about ${queryAnalysis.entityType} ${queryAnalysis.attributeType} in the uploaded documents."
-
-GENERAL RULES:
+INSTRUCTIONS:
 1. Only use information from the provided context
 2. Always cite which document(s) your answer comes from
 3. Be concise but thorough
 4. Do not make up or infer information not present in the context
-5. If multiple types of information are present, clearly specify which type you're providing
+5. If you don't have enough information to answer the question, say so clearly
 
 IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]
 You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chunk_0] [USED_CHUNK: chunk_1]
