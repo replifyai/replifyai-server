@@ -166,7 +166,7 @@ export class RAGService {
   }
 
   /**
-   * Generate response with simplified context handling using Groq
+   * Generate response with sophisticated context handling and query intent analysis
    */
   private async generateResponse(query: string, contextChunks: Array<{
     id: string;
@@ -176,14 +176,31 @@ export class RAGService {
     response: string;
     usedChunkIds: string[];
   }> {
+    // Get query analysis for enhanced prompting
+    const queryAnalysis = await this.analyzeQueryIntent(query);
+
     const systemPrompt = `You are a helpful AI assistant that answers questions based ONLY on the provided context from uploaded documents. 
 
-INSTRUCTIONS:
+QUERY ANALYSIS:
+Primary Intent: ${queryAnalysis.primaryIntent}
+Entity Type: ${queryAnalysis.entityType}
+Attribute Type: ${queryAnalysis.attributeType}
+Specific Terms Required: ${queryAnalysis.specificTerms.join(', ')}
+Conflicting Terms to Avoid: ${queryAnalysis.conflictingTerms.join(', ')}
+
+CRITICAL INSTRUCTIONS:
+1. Focus ONLY on information that matches the entity type "${queryAnalysis.entityType}" and attribute type "${queryAnalysis.attributeType}"
+2. If the user asks about "${queryAnalysis.entityType} ${queryAnalysis.attributeType}", provide ONLY that specific information
+3. Ignore any information about conflicting entities: ${queryAnalysis.conflictingTerms.join(', ')}
+4. If the context contains both relevant and conflicting information, clearly distinguish and provide only the relevant information
+5. If the context doesn't contain the SPECIFIC information requested, say "I don't have enough information about ${queryAnalysis.entityType} ${queryAnalysis.attributeType} in the uploaded documents."
+
+GENERAL RULES:
 1. Only use information from the provided context
 2. Always cite which document(s) your answer comes from
 3. Be concise but thorough
 4. Do not make up or infer information not present in the context
-5. If you don't have enough information to answer the question, say so clearly
+5. If multiple types of information are present, clearly specify which type you're providing
 
 IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]
 You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chunk_0] [USED_CHUNK: chunk_1]
@@ -191,7 +208,7 @@ You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chun
 Context from uploaded documents:
 ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
-    // Use Groq for generating the response
+    // Use OpenAI for generating the response
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -203,12 +220,6 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
     });
 
     const responseText = response.choices[0].message.content || "I couldn't generate a response.";
-
-    // const responseText = await generateGroqChatResponse(systemPrompt, query, {
-    //   model: "llama-3.1-8b-instant",
-    //   temperature: 0.1,
-    //   maxTokens: 1000,
-    // });
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
@@ -227,6 +238,81 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
       response: cleanResponse,
       usedChunkIds,
     };
+  }
+
+  /**
+   * Analyze query intent to provide better context-aware responses
+   */
+  private async analyzeQueryIntent(query: string): Promise<{
+    primaryIntent: string;
+    specificTerms: string[];
+    contextRequirements: string[];
+    conflictingTerms: string[];
+    entityType: string;
+    attributeType: string;
+  }> {
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert query analyzer. Analyze the user's query to understand their specific intent and context requirements.
+
+Your task is to identify:
+1. What the user is primarily looking for (primary intent)
+2. Specific terms that must be present in relevant content
+3. Context requirements that content must satisfy
+4. Terms that would indicate conflicting or irrelevant content
+5. The type of entity they're asking about (product, package, service, etc.)
+6. The type of attribute they want (dimensions, weight, specifications, etc.)
+
+Return a JSON object with this structure:
+{
+  "primaryIntent": "Brief description of what user wants",
+  "specificTerms": ["term1", "term2"],
+  "contextRequirements": ["requirement1", "requirement2"],
+  "conflictingTerms": ["conflicting1", "conflicting2"],
+  "entityType": "product|package|service|document|general",
+  "attributeType": "dimensions|weight|specifications|price|features|general"
+}
+
+Examples:
+- "What are the product dimensions?" → entity: "product", attribute: "dimensions", conflicting: ["packaging", "box", "container"]
+- "What is the packaging weight?" → entity: "package", attribute: "weight", conflicting: ["product", "item", "device"]
+- "How much does shipping cost?" → entity: "service", attribute: "price", conflicting: ["product", "item"]`
+          },
+          {
+            role: "user",
+            content: query
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        max_tokens: 500,
+      });
+
+      const result = JSON.parse(response.choices[0].message.content || '{}');
+      return {
+        primaryIntent: result.primaryIntent || 'General information',
+        specificTerms: result.specificTerms || [],
+        contextRequirements: result.contextRequirements || [],
+        conflictingTerms: result.conflictingTerms || [],
+        entityType: result.entityType || 'general',
+        attributeType: result.attributeType || 'general'
+      };
+    } catch (error) {
+      console.error('Query intent analysis failed:', error);
+      // Fallback to basic analysis
+      return {
+        primaryIntent: 'General information',
+        specificTerms: [],
+        contextRequirements: [],
+        conflictingTerms: [],
+        entityType: 'general',
+        attributeType: 'general'
+      };
+    }
   }
 
   /**
