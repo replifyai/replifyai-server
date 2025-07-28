@@ -194,16 +194,16 @@ class QdrantCloudService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 5, 
+    limit: number = 10, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {
     console.log("🚀 ~ QdrantCloudService ~ productName:", productName);
-    await this.ensureCollection();
+    // await this.ensureCollection();
     
     const searchBody: any = {
       vector: queryVector,
-      limit,
+      limit:10,
       score_threshold: scoreThreshold,
       with_payload: true,
     };
@@ -276,7 +276,7 @@ export class QdrantService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 5, 
+    limit: number = 10, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {

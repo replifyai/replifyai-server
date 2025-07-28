@@ -41,6 +41,11 @@ export class RAGService {
     /need more details/i,
     /cannot answer.*based on.*context/i,
     /documents.*don't include/i,
+    /cannot answer.*question/i,
+    /therefore.*cannot answer/i,
+    /unable to answer.*question/i,
+    /context.*does not include/i,
+    /provided context.*does not/i,
   ];
 
   async queryDocuments(query: string, options: {
