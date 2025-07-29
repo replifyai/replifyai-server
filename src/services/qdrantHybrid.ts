@@ -71,6 +71,7 @@ class QdrantCloudService {
     return randomUUID();
   }
 
+
   /**
    * Initialize the collection with improved error handling
    * @returns {Promise<void>}
