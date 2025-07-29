@@ -4,6 +4,7 @@
  */
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { env } from "../env.js";
+import { randomUUID } from 'crypto';
 
 // Business logic interfaces - keep existing
 export interface QdrantPoint {
@@ -61,6 +62,15 @@ class QdrantCloudService {
   getKnowledgeBase() {
     return this.collectionName;
   }
+
+  /**
+   * Generate a unique UUID for Qdrant point
+   * @returns {string} UUID string
+   */
+  private generateUniqueId(): string {
+    return randomUUID();
+  }
+
 
   /**
    * Initialize the collection with improved error handling
@@ -179,7 +189,7 @@ class QdrantCloudService {
     console.log('Adding points to Qdrant:', {
       count: points.length,
       samplePoint: points[0] ? {
-        id: points[0].id,
+        originalId: points[0].id,
         vectorLength: points[0].vector?.length,
         payload: points[0].payload
       } : null
@@ -215,13 +225,17 @@ class QdrantCloudService {
             continue;
           }
           
-          // Add points to collection
+          // Add points to collection - Generate unique UUIDs for each point
           await this.client.upsert(this.collectionName, {
             wait: true,
             points: validatedPoints.map(point => ({
-              id: point.id,
+              id: this.generateUniqueId(), // Generate unique UUID for Qdrant
               vector: point.vector,
-              payload: point.payload,
+              payload: {
+                ...point.payload,
+                originalChunkId: point.id, // Store original chunk ID for reference
+                chunkReference: `${point.payload.documentId}_${point.payload.chunkIndex}` // Store reference
+              },
             }))
           });
           
@@ -235,6 +249,7 @@ class QdrantCloudService {
           this.operationStats.addedDocuments += validatedPoints.length;
           
           console.log(`Successfully added batch of ${validatedPoints.length} points to vector store (${results.processed}/${points.length})`);
+          console.log(`Generated unique UUIDs for ${validatedPoints.length} points`);
           
           // Add a small delay between batches to reduce load
           if (i + this.addBatchSize < points.length) {
@@ -346,7 +361,7 @@ class QdrantCloudService {
         limit: Math.min(limit, 100), // Cap at 100 for performance
         score_threshold: scoreThreshold,
         with_payload: true,
-        with_vectors: false // Don't return vectors to save bandwidth
+        with_vector: false // Don't return vectors to save bandwidth
       };
       
       // Add filters if provided
