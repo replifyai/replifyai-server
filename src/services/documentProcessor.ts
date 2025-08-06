@@ -139,6 +139,7 @@ export class DocumentProcessor {
             content: chunk.content,
             filename: document.originalName,
             metadata: chunk.metadata,
+            uploadTimestamp: Date.now(),
           },
         });
       }
