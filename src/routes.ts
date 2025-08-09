@@ -8,6 +8,7 @@ import { batchUploadService } from "./services/batchUploadService.js";
 import { insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
+import { WebSocketHandler } from './services/websocketHandler.js';
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -516,6 +517,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
+  // Initialize WebSocket handler for realtime transcription
+  new WebSocketHandler(httpServer);
   return httpServer;
 }
 
