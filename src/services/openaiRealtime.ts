@@ -80,7 +80,9 @@ export class OpenAIRealtimeService {
         input_audio_format: this.options.inputAudioFormat ?? "pcm16",
         input_audio_transcription: {
           model: this.options.model ?? "whisper-1",
-          ...(this.options.language ? { language: this.options.language } : {}),
+          language: "en",
+          // ...(this.options.language ? { language: this.options.language } : {}), // add default language en-US
+          // ...(this.options.model === "whisper-1" ? { language: "en-US" } : {}), // add default language en-US
         },
         turn_detection: {
           type: "server_vad" as const,

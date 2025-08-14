@@ -523,17 +523,11 @@ Examples:
     content: string;
     originalData: any;
   }>): Promise<{ response: string; usedChunkIds: string[] }> {
-    const systemPrompt = `You are a professional, trustworthy sales agent. Speak naturally and concisely (60–120 words).
-Your goals:
-1) Understand the user's need; if ambiguous, ask one focused clarifying question.
-2) Recommend the best option based ONLY on the provided context, highlighting 2–3 concrete benefits.
-3) Upsell appropriately with one relevant add-on or higher tier if it truly fits.
-4) Offer a clear next step or call-to-action.
-
-STRICT RULES:
-- Use ONLY the provided context. Do NOT invent features or pricing.
-- If the context lacks needed details, say so briefly and ask the most helpful follow-up question.
-- Keep tone helpful, confident, and respectful.
+    const systemPrompt = `You are a friendly, consultative sales agent.
+Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
+Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
+Constraints: ≤80 words; single short paragraph; no bullets, no numbered lists, no headings, no bold; factual only—do not invent features or pricing.
+If the request is ambiguous, ask exactly one focused clarifying question.
 
 Context:
 ${contextChunks.map(c => c.content).join('\n\n---\n\n')}
@@ -546,8 +540,8 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
         { role: "system", content: systemPrompt },
         { role: "user", content: query },
       ],
-      temperature: 0.6,
-      max_tokens: 600,
+      temperature: 0.4,
+      max_tokens: 240,
     });
 
     const responseText = response.choices[0]?.message?.content || "";
