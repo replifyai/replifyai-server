@@ -53,7 +53,8 @@ class QdrantCloudService {
     // Initialize the client with improved error handling
     this.client = new QdrantClient({
       url: env.QDRANT_URL,
-      apiKey: env.QDRANT_API_KEY
+      apiKey: env.QDRANT_API_KEY,
+      checkCompatibility: false
     });
     
     console.log(`Initialized Qdrant client at ${env.QDRANT_URL} for collection ${this.collectionName}`);

@@ -53,8 +53,7 @@ export class RAGService {
     similarityThreshold?: number;
     productName?: string;
   } = {}): Promise<RAGResponse> {
-    const { retrievalCount = 20, similarityThreshold = 0.75, productName = "" } = options;
-    console.log("🚀 ~ RAGService ~ productName:", productName);
+    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "" } = options;
     try {
       // Create embedding for the query
       const queryEmbedding = await createEmbedding(query);
@@ -176,40 +175,34 @@ export class RAGService {
     response: string;
     usedChunkIds: string[];
   }> {
+    
     // Get query analysis for enhanced prompting
-    const queryAnalysis = await this.analyzeQueryIntent(query);
+    // const queryAnalysis = await this.analyzeQueryIntent(query);
 
-    const systemPrompt = `You are a helpful AI assistant that answers questions based ONLY on the provided context from uploaded documents. 
-
-QUERY ANALYSIS:
-Primary Intent: ${queryAnalysis.primaryIntent}
-Entity Type: ${queryAnalysis.entityType}
-Attribute Type: ${queryAnalysis.attributeType}
-Specific Terms Required: ${queryAnalysis.specificTerms.join(', ')}
-Conflicting Terms to Avoid: ${queryAnalysis.conflictingTerms.join(', ')}
-
-CRITICAL INSTRUCTIONS:
-1. Focus ONLY on information that matches the entity type "${queryAnalysis.entityType}" and attribute type "${queryAnalysis.attributeType}"
-2. If the user asks about "${queryAnalysis.entityType} ${queryAnalysis.attributeType}", provide ONLY that specific information
-3. Ignore any information about conflicting entities: ${queryAnalysis.conflictingTerms.join(', ')}
-4. If the context contains both relevant and conflicting information, clearly distinguish and provide only the relevant information
-5. If the context doesn't contain the SPECIFIC information requested, say "I don't have enough information about ${queryAnalysis.entityType} ${queryAnalysis.attributeType} in the uploaded documents."
-
-GENERAL RULES:
-1. Only use information from the provided context
-2. Always cite which document(s) your answer comes from
-3. Be concise but thorough
-4. Do not make up or infer information not present in the context
-5. If multiple types of information are present, clearly specify which type you're providing
-
-IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]
-You can include multiple chunk IDs if you use multiple chunks: [USED_CHUNK: chunk_0] [USED_CHUNK: chunk_1]
-
-Context from uploaded documents:
-${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
+    const systemPrompt = `
+    You are an AI assistant that must answer questions **only** using the provided context from uploaded documents.
+    
+    QUERY: ${query}
+    
+    CRITICAL INSTRUCTIONS:
+    1. Use only the provided context for answers — never use external knowledge.  
+    2. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.  
+    3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."  
+    
+    ANSWERING RULES:
+    - Always cite source chunks like this: [USED_CHUNK: chunk_id]  
+    - Be concise, accurate, and thorough.  
+    - Do not assume, invent, or infer beyond the text.  
+    - If multiple documents provide different info, clearly separate them.  
+    
+    Context from uploaded documents:  
+    ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}
+    `;
+    
 
     // Use OpenAI for generating the response
     const response = await openai.chat.completions.create({
+      // model: "llama-3.1-8b-instant",
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
