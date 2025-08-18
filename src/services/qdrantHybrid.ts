@@ -492,7 +492,7 @@ export class QdrantService {
   }
 
   async getChunksByProductsOrTopics(products: string[], topics: string[]): Promise<SearchResult[]> {
-    await this.cloudService.ensureCollection();
+    // await this.cloudService.ensureCollection();
     
     // Create filter for product names and topics - find chunks where they match any of the provided values
     const filter = {

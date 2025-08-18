@@ -8,6 +8,7 @@ import { batchUploadService } from "./services/batchUploadService.js";
 import { insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
+import { qaIngestionService } from "./services/qaIngestionService.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -266,6 +267,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Ingest QA pairs (manual text answers)
+  app.post("/api/qa-pairs", async (req, res) => {
+    try {
+      const { qaPairs, filename } = req.body;
+
+      if (!qaPairs || !Array.isArray(qaPairs) || qaPairs.length === 0) {
+        return res.status(400).json({ message: "qaPairs is required and must be a non-empty array" });
+      }
+
+      // Validate minimal shape early
+      for (let i = 0; i < qaPairs.length; i++) {
+        const p = qaPairs[i];
+        if (!p || !p.query || !p.answer || !p.productName) {
+          return res.status(400).json({ message: `qaPairs[${i}] must include query, answer, and productName` });
+        }
+      }
+
+      const result = await qaIngestionService.ingestQAPairs(qaPairs, { filename });
+      return res.json(result);
+    } catch (error) {
+      return res.status(500).json({ message: (error as Error).message });
     }
   });
 
