@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./services/documentProcessor.js";
+// import { documentProcessor } from "./services/dp1.js";
 import { ragService } from "./services/ragService.js";
 import { batchUploadService } from "./services/batchUploadService.js";
 import { insertSettingSchema } from "../shared/schema.js";
@@ -230,12 +231,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete document
   app.delete("/api/documents/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const document = await storage.getDocument(id);
+      const id = req.params.id + "";
+      // const document = await storage.getDocument(id);
       
-      if (!document) {
-        return res.status(404).json({ message: "Document not found" });
-      }
+      // if (!document) {
+      //   return res.status(404).json({ message: "Document not found" });
+      // }
 
       // Delete from vector database
       await documentProcessor.deleteDocumentFromVector(id);
@@ -245,6 +246,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json({ message: "Document deleted successfully" });
     } catch (error) {
+      console.error('Document deletion error:', JSON.stringify(error?.message, null, 2));
       res.status(500).json({ message: (error as Error).message });
     }
   });

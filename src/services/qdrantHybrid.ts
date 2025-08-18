@@ -399,16 +399,16 @@ class QdrantCloudService {
     }
   }
 
-  async deleteByDocumentId(documentId: number): Promise<void> {
-    await this.ensureCollection();
-
+  async deleteByDocumentId(productName: string): Promise<void> {
+    console.log("🚀 Deleting by productName:", productName);
+  
     try {
       await this.client.delete(this.collectionName, {
         filter: {
           must: [
             {
-              key: "documentId",
-              match: { value: documentId },
+              key: "metadata.productName",
+              match: { value: productName },
             },
           ],
         },
@@ -418,6 +418,8 @@ class QdrantCloudService {
       throw error;
     }
   }
+  
+  
 
   async getCollectionInfo(): Promise<any> {
     await this.ensureCollection();
@@ -479,7 +481,7 @@ export class QdrantService {
     return await this.cloudService.searchSimilar(queryVector, limit, scoreThreshold, productName);
   }
 
-  async deleteByDocumentId(documentId: number): Promise<void> {
+  async deleteByDocumentId(documentId: string): Promise<void> {
     await this.cloudService.deleteByDocumentId(documentId);
   }
 

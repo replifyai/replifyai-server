@@ -5,6 +5,7 @@ import type { Document } from "../../shared/schema.js";
 import mammoth from "mammoth";
 import pdf2json from "pdf2json";
 import OpenAI from "openai";
+import fs from "fs";
 
 
 const openai = new OpenAI({
@@ -146,7 +147,8 @@ export class DocumentProcessor {
       }
 
       // Add to vector database
-      await qdrantService.addPoints(vectorChunks);
+      // await qdrantService.addPoints(vectorChunks);
+      fs.writeFileSync('vectorChunks.json', JSON.stringify(vectorChunks, null, 2));
       // Also store the vector chunks in a file for debugging (optional)
       console.log(`Processed ${vectorChunks.length} chunks with enhanced extraction`);
       // Update document status
@@ -237,13 +239,10 @@ Always respond with valid JSON only. No information should be lost during chunki
   }
 
   private buildAIChunkingPrompt(text: string, filename: string, strategy: ChunkingStrategy): string {
-    // Analyze document structure and content
-    const analysis = this.analyzeTextStructure(text);
     const isProductDoc = this.isProductDocument(text);
-    const keyInfoPatterns = this.extractKeyInformation(text);
     
-    // Build adaptive instructions based on document analysis
-    const adaptiveInstructions = this.buildAdaptiveInstructions(analysis, isProductDoc, keyInfoPatterns);
+    // Extract key information patterns to ensure they're captured
+    const keyInfoPatterns = this.extractKeyInformation(text);
     
     return `
 Analyze the following document and create comprehensive, intelligent chunks for a RAG system.
@@ -251,24 +250,20 @@ Analyze the following document and create comprehensive, intelligent chunks for 
 Document: "${filename}"
 Content Length: ${text.length} characters
 Strategy: ${strategy.name}
-Document Type: ${analysis.documentStructure}
 Max Chunk Size: ${strategy.maxChunkSize} characters
 Min Chunk Size: ${strategy.minChunkSize} characters
 
 CRITICAL: You must capture ALL important information from the document. Do not miss any key details like pricing, specifications, measurements, policies, or technical details.
 
-Document Analysis:
-${analysis.likelyOCRIssues ? '- Document may have OCR issues (spaced text detected)' : '- Document appears to have clean text'}
-${keyInfoPatterns.length > 0 ? `- Key information detected:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
+Key Information Detected:
+${keyInfoPatterns.length > 0 ? keyInfoPatterns.map(info => `- ${info}`).join('\n') : '- No specific patterns detected'}
 
 Document Content:
 """
 ${text}
 """
 
-${adaptiveInstructions}
-
-UNIVERSAL REQUIREMENTS:
+Instructions:
 1. THOROUGHLY analyze the entire document - do not miss any information
 2. Create 4-10 comprehensive chunks that capture ALL content
 3. Each chunk should be ${strategy.minChunkSize}-${strategy.maxChunkSize} characters
@@ -278,15 +273,35 @@ UNIVERSAL REQUIREMENTS:
 7. Provide meaningful titles and summaries for each chunk
 8. Rate importance (1-10) based on information value
 
+${isProductDoc ? `
+This is a PRODUCT document. You MUST capture:
+- ALL pricing information (MRP, discounts, offers, etc.)
+- Complete product specifications and features
+- Exact measurements and technical details
+- Material and care instructions
+- Warranty, return, and exchange policies
+- Use cases and target audience
+- Benefits and unique selling points
+- Color variants and model information
+- Any certifications or standards mentioned
+` : `
+For this document, ensure you capture:
+- All numerical data and measurements
+- Key processes and procedures
+- Important policies and guidelines
+- Technical specifications
+- Any structured information (tables, lists)
+`}
+
 QUALITY CHECK: After creating chunks, verify that:
-- All numerical data is included (prices, measurements, quantities)
-- All key specifications are captured
+- All pricing/cost information is included
+- All measurements and specifications are captured
 - No important details are missing
-- Content is logically grouped by topic/function
+- Content is logically grouped
 
 Respond with JSON in this exact format:
 {
-  "documentType": "product" | "invoice" | "manual" | "technical" | "general",
+  "documentType": "product" | "technical" | "general" | "manual",
   "documentSummary": "Brief summary of the entire document",
   "chunks": [
     {
@@ -299,72 +314,6 @@ Respond with JSON in this exact format:
     }
   ]
 }`;
-  }
-
-  private buildAdaptiveInstructions(analysis: any, isProductDoc: boolean, keyInfo: string[]): string {
-    let instructions = '';
-    
-    if (isProductDoc) {
-      instructions += `
-PRODUCT DOCUMENT - You MUST capture:
-- ALL pricing information (MRP, discounts, offers, costs, fees)
-- Complete product specifications and features
-- Exact measurements and technical details
-- Material composition and construction details
-- Warranty, return, and exchange policies
-- Use cases and target applications
-- Benefits and unique selling points
-- Color variants and model information
-- Any certifications or standards mentioned
-- Brand and manufacturer information`;
-    } else if (analysis.documentStructure === 'invoice') {
-      instructions += `
-INVOICE/BILLING DOCUMENT - You MUST capture:
-- All line items with quantities and prices
-- Subtotals, taxes, and grand totals
-- Payment terms and due dates
-- Billing and shipping addresses
-- Invoice numbers and dates
-- Vendor/customer information
-- Discount and promotion details`;
-    } else if (analysis.documentStructure === 'manual') {
-      instructions += `
-MANUAL/INSTRUCTION DOCUMENT - You MUST capture:
-- Step-by-step procedures and instructions
-- Safety warnings and precautions
-- Technical specifications and requirements
-- Troubleshooting information
-- Parts lists and diagrams references
-- Contact information for support`;
-    } else {
-      instructions += `
-GENERAL DOCUMENT - Ensure you capture:
-- All numerical data and measurements
-- Key processes and procedures
-- Important policies and guidelines
-- Technical specifications
-- Contact information and references
-- Any structured information (tables, lists)
-- Dates and deadlines`;
-    }
-    
-    // Add specific instructions based on detected patterns
-    if (keyInfo.some(info => info.includes('Pricing'))) {
-      instructions += `
-- SPECIAL ATTENTION: Pricing information detected - ensure all prices are captured accurately`;
-    }
-    
-    if (keyInfo.some(info => info.includes('Measurement'))) {
-      instructions += `
-- SPECIAL ATTENTION: Measurements detected - capture all dimensions, weights, and specifications`;
-    }
-    
-    if (analysis.likelyOCRIssues) {
-      instructions += `
-- NOTE: Text may have OCR spacing issues - interpret spaced numbers correctly`;
-    }
-    
-    return instructions;
   }
 
   private validateAndCleanAIResult(result: AIChunkingResult, strategy: ChunkingStrategy, originalText: string): AIChunkingResult {
@@ -535,192 +484,122 @@ GENERAL DOCUMENT - Ensure you capture:
 
   private extractKeyInformation(text: string): string[] {
     const keyInfo: string[] = [];
+    const lowerText = text.toLowerCase();
     
-    // Use adaptive extraction based on document analysis
-    const analysis = this.analyzeTextStructure(text);
-    
-    // Extract pricing information adaptively
-    const pricingInfo = this.extractPricingInformation(text, analysis);
-    keyInfo.push(...pricingInfo);
-    
-    // Extract measurements adaptively
-    const measurementInfo = this.extractMeasurementInformation(text);
-    keyInfo.push(...measurementInfo);
-    
-    // Extract model/product codes
-    const modelInfo = this.extractModelInformation(text);
-    keyInfo.push(...modelInfo);
-    
-    // Extract other key information
-    const otherInfo = this.extractOtherKeyInformation(text);
-    keyInfo.push(...otherInfo);
-    
-    return [...new Set(keyInfo)]; // Remove duplicates
-  }
-
-  private extractPricingInformation(text: string, analysis: any): string[] {
-    const pricingInfo: string[] = [];
-    
-    // Universal pricing patterns that work across different formats
-    const universalPatterns = [
-      // Currency symbols followed by numbers
-      /(?:₹|rs\.?|inr|usd|\$|€|£)\s*(\d{1,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-      // Price/cost keywords followed by numbers
-      /(?:price|cost|mrp|rate|amount|fee|charge|total)[\s:=\-]*(?:₹|rs\.?|\$)?\s*(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-      // Numbers followed by currency words
-      /(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)\s*(?:rupees?|dollars?|euros?|pounds?|only|each)/gi,
-      // In pricing/cost sections, find significant numbers
-      /(?:pricing|cost|price|charges?)[\s\S]{0,150}?(\d{2,6}(?:,\d{3})*)/gi
+    // Pricing patterns - much more specific to avoid false matches
+    const pricePatterns = [
+      // Pattern 1: "price: 1899" or "cost: Rs 1899"
+      /(?:price|cost|mrp|rate|amount|fee|charge)[\s:]+(?:rs\.?|₹|inr|usd|\$)?\s*(\d{3,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
+      // Pattern 2: "₹1899" or "Rs 1899" or "Rs. 1899"
+      /(?:₹|rs\.?\s+)(\d{3,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
+      // Pattern 3: "1899 rupees" or "1899 only" 
+      /(\d{3,6}(?:,\d{3})*(?:\.\d{2})?)\s*(?:rupees?|dollars?|only)/gi,
+      // Pattern 4: In pricing sections, look for standalone numbers
+      /(?:pricing|price|cost)[\s\S]{0,100}?(\d{3,6})/gi,
+      // Pattern 5: Product name followed by dash and number (like "Cushion - 1899")
+      /(?:cushion|product)[\s\-]+(\d{3,6})/gi
     ];
-
-    // Document-specific patterns based on structure
-    if (analysis.documentStructure === 'product') {
-      universalPatterns.push(
-        // Product name - price patterns
-        /(?:^|\n)[^\n]*(?:product|item|model)[\s\S]{0,100}?(\d{3,6})/gi,
-        // Table-like structures with prices
-        /(?:^|\n)[^\n]*[\-\s]+(\d{3,6})[\s]*(?:\n|$)/gi
-      );
-    } else if (analysis.documentStructure === 'invoice') {
-      universalPatterns.push(
-        // Invoice total patterns
-        /(?:total|subtotal|grand total|amount due)[\s:=\-]*(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-        // Line item patterns
-        /(?:^|\n)[^\n]*\s+(\d{1,6}(?:,\d{3})*(?:\.\d{2})?)\s*(?:\n|$)/gi
-      );
-    }
-
-    for (const pattern of universalPatterns) {
+    
+    for (const pattern of pricePatterns) {
       const matches = text.match(pattern);
       if (matches) {
         matches.forEach(match => {
           // Extract the actual number from the match
-          const numberMatch = match.match(/\d{1,6}(?:,\d{3})*(?:\.\d{2})?/);
+          const numberMatch = match.match(/\d{3,6}(?:,\d{3})*/);
           if (numberMatch) {
-            const number = numberMatch[0];
-            // Filter out obviously wrong numbers (like phone numbers, years, etc.)
-            if (this.isLikelyPriceNumber(number, match)) {
-              pricingInfo.push(`Pricing found: ${number}`);
-            }
+            keyInfo.push(`Pricing found: ${numberMatch[0]}`);
+          } else {
+            keyInfo.push(`Pricing found: ${match.trim()}`);
           }
         });
       }
     }
-
-    return pricingInfo;
-  }
-
-  private isLikelyPriceNumber(number: string, context: string): boolean {
-    const numValue = parseFloat(number.replace(/,/g, ''));
-    const lowerContext = context.toLowerCase();
     
-    // Too small to be a meaningful price (unless it's cents)
-    if (numValue < 1 && !lowerContext.includes('cent')) return false;
-    
-    // Too large to be a reasonable price
-    if (numValue > 10000000) return false;
-    
-    // Looks like a year
-    if (numValue >= 1900 && numValue <= 2030 && number.length === 4) return false;
-    
-    // Looks like a phone number
-    if (number.length >= 10 && /^\d+$/.test(number.replace(/[,\s]/g, ''))) return false;
-    
-    // Has good pricing context
-    if (lowerContext.includes('price') || lowerContext.includes('cost') || 
-        lowerContext.includes('₹') || lowerContext.includes('rs') ||
-        lowerContext.includes('$') || lowerContext.includes('total')) {
-      return true;
-    }
-    
-    // Reasonable price range
-    return numValue >= 10 && numValue <= 1000000;
-  }
-
-  private extractMeasurementInformation(text: string): string[] {
-    const measurementInfo: string[] = [];
-    
+    // Measurement patterns
     const measurementPatterns = [
-      // Physical dimensions
-      /(\d+(?:\.\d+)?)\s*(?:x|×)\s*(\d+(?:\.\d+)?)\s*(?:x|×)?\s*(\d+(?:\.\d+)?)?\s*(?:cm|mm|m|inch|in|ft|feet)/gi,
-      /(?:dimensions?|size|length|width|height)[\s:=\-]*(\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)*)\s*(?:cm|mm|m|inch|in|ft|feet)/gi,
-      // Weight measurements
-      /(?:weight|mass)[\s:=\-]*(\d+(?:\.\d+)?)\s*(?:kg|g|grams?|pounds?|lbs?|oz)/gi,
-      /(\d+(?:\.\d+)?)\s*(?:kg|g|grams?|pounds?|lbs?|oz)/gi,
-      // Volume/capacity
-      /(?:capacity|volume)[\s:=\-]*(\d+(?:\.\d+)?)\s*(?:l|liters?|ml|gallons?|cups?)/gi,
-      // Power/electrical
-      /(\d+(?:\.\d+)?)\s*(?:w|watts?|v|volts?|a|amps?|hz|hertz)/gi
+      /(\d+(?:\.\d+)?)\s*(?:cm|mm|inch|inches|centimeters|millimeters|feet|ft)/gi,
+      /(\d+(?:\.\d+)?)\s*(?:kg|grams?|g|pounds?|lbs?|oz)/gi,
+      /dimensions?[\s:]*(\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)*)/gi,
+      /size[\s:]*(\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)*)/gi,
+      /weight[\s:]*(\d+(?:\.\d+)?)/gi
     ];
     
     for (const pattern of measurementPatterns) {
       const matches = text.match(pattern);
       if (matches) {
         matches.forEach(match => {
-          measurementInfo.push(`Measurement found: ${match.trim()}`);
+          keyInfo.push(`Measurement found: ${match.trim()}`);
         });
       }
     }
     
-    return measurementInfo;
-  }
-
-  private extractModelInformation(text: string): string[] {
-    const modelInfo: string[] = [];
-    
+    // Model/SKU patterns
     const modelPatterns = [
-      // Model numbers/codes
-      /(?:model|sku|part\s+(?:no|number)|item\s+(?:no|number)|product\s+code)[\s:=\-]*([A-Z0-9\-_]{3,20})/gi,
-      // General alphanumeric codes
-      /\b([A-Z]{2,}-[A-Z0-9\-]{3,})\b/g,
-      /\b([A-Z]{3,}\d{2,})\b/g
+      /(?:model|sku|product\s+code|item\s+code)[\s:]*([A-Z0-9-]+)/gi,
+      /\b([A-Z]{2,}-[A-Z0-9-]{3,})\b/g
     ];
     
     for (const pattern of modelPatterns) {
       const matches = text.match(pattern);
       if (matches) {
         matches.forEach(match => {
-          modelInfo.push(`Model/SKU found: ${match.trim()}`);
+          keyInfo.push(`Model/SKU found: ${match.trim()}`);
         });
       }
     }
     
-    return modelInfo;
-  }
-
-  private extractOtherKeyInformation(text: string): string[] {
-    const otherInfo: string[] = [];
-    
-    // Warranty/policy information
+    // Warranty/Policy patterns
     const policyPatterns = [
-      /(?:warranty|guarantee)[\s:=\-]*(\d+\s*(?:year|month|day)s?)/gi,
-      /(?:return|exchange|refund)\s+policy/gi
+      /(?:warranty|guarantee)[\s:]*(\d+\s*(?:year|month|day)s?)/gi,
+      /(?:return|exchange|refund)\s+policy/gi,
+      /\b(\d+)\s*(?:year|month|day)s?\s+(?:warranty|guarantee)/gi
     ];
     
-    // Material information
-    const materialPatterns = [
-      /(?:material|made\s+(?:of|from)|fabric)[\s:=\-]*([a-z\s,]{5,50})/gi
-    ];
-    
-    // Color/variant information
-    const variantPatterns = [
-      /(?:color|colour|variant|available\s+in)s?[\s:=\-]*([a-z\s,]{5,100})/gi
-    ];
-    
-    const allPatterns = [...policyPatterns, ...materialPatterns, ...variantPatterns];
-    
-    for (const pattern of allPatterns) {
+    for (const pattern of policyPatterns) {
       const matches = text.match(pattern);
       if (matches) {
         matches.forEach(match => {
-          if (match.length < 150) { // Avoid capturing too much
-            otherInfo.push(`Additional info found: ${match.trim()}`);
+          keyInfo.push(`Policy found: ${match.trim()}`);
+        });
+      }
+    }
+    
+    // Color/Variant patterns
+    const colorPatterns = [
+      /(?:color|colour|variant)s?[\s:]*([a-z\s,]+)/gi,
+      /(?:available\s+in)[\s:]*([a-z\s,]+)/gi
+    ];
+    
+    for (const pattern of colorPatterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          if (match.length < 100) { // Avoid capturing too much
+            keyInfo.push(`Variant found: ${match.trim()}`);
           }
         });
       }
     }
     
-    return otherInfo;
+    // Technical specifications
+    const techPatterns = [
+      /(?:material|fabric|made\s+(?:of|from))[\s:]*([a-z\s,]+)/gi,
+      /(?:power|voltage|frequency)[\s:]*(\d+(?:\.\d+)?)\s*(?:w|watts?|v|volts?|hz|hertz)/gi,
+      /(?:capacity|volume)[\s:]*(\d+(?:\.\d+)?)\s*(?:l|liters?|ml|gallons?)/gi
+    ];
+    
+    for (const pattern of techPatterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          if (match.length < 100) { // Avoid capturing too much
+            keyInfo.push(`Technical spec found: ${match.trim()}`);
+          }
+        });
+      }
+    }
+    
+    return [...new Set(keyInfo)]; // Remove duplicates
   }
 
   private findMissingCriticalInfo(originalText: string, chunkContent: string, keyInfo: string[]): string[] {
@@ -1018,75 +897,29 @@ GENERAL DOCUMENT - Ensure you capture:
   }
 
   private isProductDocument(text: string): boolean {
+    const productIndicators = [
+      'product name', 'product specification', 'mrp', 'price', 'sku',
+      'features', 'benefits', 'material', 'dimensions', 'weight',
+      'return policy', 'exchange policy', 'warranty', 'hsn',
+      'technical specification', 'color', 'size', 'model',
+      'use case', 'target audience', 'suitable for', 'product description',
+      'variants', 'pricing', 'cost', 'amount', 'care instructions',
+      'fabric type', 'item weight', 'item dimensions', 'cushion',
+      'seat cushion', 'ergonomic', 'memory foam', 'comfort'
+    ];
+    
     const lowerText = text.toLowerCase();
-    let score = 0;
+    const matchCount = productIndicators.filter(indicator => 
+      lowerText.includes(indicator)
+    ).length;
     
-    // Universal product indicators (work across different formats)
-    const universalIndicators = [
-      { keywords: ['product', 'item'], weight: 2 },
-      { keywords: ['price', 'cost', 'mrp'], weight: 3 },
-      { keywords: ['features', 'specifications', 'specs'], weight: 2 },
-      { keywords: ['dimensions', 'weight', 'size'], weight: 2 },
-      { keywords: ['material', 'fabric', 'construction'], weight: 1 },
-      { keywords: ['warranty', 'guarantee'], weight: 1 },
-      { keywords: ['model', 'sku', 'part number'], weight: 2 },
-      { keywords: ['benefits', 'advantages'], weight: 1 },
-      { keywords: ['color', 'colour', 'variant'], weight: 1 },
-      { keywords: ['brand', 'manufacturer'], weight: 1 }
-    ];
+    // Also check for pricing patterns as strong indicators
+    const hasPricing = /\b\d{3,5}\b/.test(text) && /(?:price|cost|mrp|₹|rs)/i.test(text);
     
-    // Check for universal indicators
-    universalIndicators.forEach(indicator => {
-      if (indicator.keywords.some(keyword => lowerText.includes(keyword))) {
-        score += indicator.weight;
-      }
-    });
+    // Check for measurement patterns
+    const hasMeasurements = /\d+(?:\.\d+)?\s*(?:cm|mm|kg|g|inch|inches|centimeters)/i.test(text);
     
-    // Check for pricing patterns (strong indicator)
-    const hasPricing = this.detectPricingPatterns(text);
-    if (hasPricing) score += 4;
-    
-    // Check for measurement patterns (strong indicator)
-    const hasMeasurements = this.detectMeasurementPatterns(text);
-    if (hasMeasurements) score += 3;
-    
-    // Check for product catalog structure (tables, lists)
-    const hasProductStructure = this.detectProductStructure(text);
-    if (hasProductStructure) score += 2;
-    
-    // Document is likely a product document if score >= 5
-    return score >= 5;
-  }
-
-  private detectPricingPatterns(text: string): boolean {
-    const pricingPatterns = [
-      /(?:₹|rs\.?|inr|usd|\$|€|£)\s*\d+/gi,
-      /(?:price|cost|mrp|total|amount)[\s:=\-]*\d+/gi,
-      /\d+\s*(?:rupees?|dollars?|only)/gi
-    ];
-    
-    return pricingPatterns.some(pattern => pattern.test(text));
-  }
-
-  private detectMeasurementPatterns(text: string): boolean {
-    const measurementPatterns = [
-      /\d+(?:\.\d+)?\s*(?:cm|mm|m|inch|in|ft|feet|kg|g|lbs?|oz)/gi,
-      /(?:dimensions?|size|weight|length|width|height)[\s:=\-]*\d+/gi,
-      /\d+\s*[x×]\s*\d+/gi
-    ];
-    
-    return measurementPatterns.some(pattern => pattern.test(text));
-  }
-
-  private detectProductStructure(text: string): boolean {
-    // Check for table-like structures or product listings
-    const structurePatterns = [
-      /(?:^|\n)\s*(?:product|item|model)[\s\S]{0,100}?(?:\d+|₹|rs)/gim,
-      /(?:^|\n)[^\n]*[\-\|]+[^\n]*\d+/gim,
-      /(?:variants?|models?|options?)[\s:]/gi
-    ];
-    
-    return structurePatterns.some(pattern => pattern.test(text));
+    return matchCount >= 3 || hasPricing || hasMeasurements;
   }
 
   private determineChunkingStrategy(filename: string, text: string): ChunkingStrategy {
@@ -1195,13 +1028,29 @@ GENERAL DOCUMENT - Ensure you capture:
   private cleanAndNormalizeText(text: string): string {
     let cleanedText = text;
     
-    // Analyze the text to understand its structure
-    const textAnalysis = this.analyzeTextStructure(text);
+    // Fix spaced-out pricing numbers (like "1 8 99" -> "1899")
+    cleanedText = cleanedText.replace(/\b(\d)\s+(\d)\s+(\d+)\b/g, '$1$2$3');
+    cleanedText = cleanedText.replace(/\b(\d)\s+(\d+)\b/g, '$1$2');
     
-    // Apply adaptive cleaning based on the analysis
-    cleanedText = this.applyAdaptiveCleaning(cleanedText, textAnalysis);
+    // Fix spaced-out characters (like "B a r e f o o t" -> "Barefoot")
+    cleanedText = cleanedText.replace(/\b([A-Za-z])\s+(?=[A-Za-z]\s+[A-Za-z])/g, (match, letter) => {
+      const words = match.split(/\s+/);
+      if (words.length >= 3 && words.every(w => w.length === 1)) {
+        return words.join('');
+      }
+      return match;
+    });
     
-    // Standard cleaning that works for all documents
+    // More aggressive spaced character fixing
+    cleanedText = cleanedText.replace(/\b([A-Za-z])\s+([A-Za-z])\s+([A-Za-z])/g, (match) => {
+      const letters = match.replace(/\s+/g, '');
+      if (letters.length <= 15) {
+        return letters;
+      }
+      return match;
+    });
+    
+    // Clean up excessive whitespace and fix common OCR errors
     cleanedText = cleanedText
       .replace(/\s+/g, ' ')
       .replace(/\s+([.,!?;:])/g, '$1')
@@ -1209,92 +1058,6 @@ GENERAL DOCUMENT - Ensure you capture:
       .replace(/\n\s*\n\s*\n/g, '\n\n')
       .trim();
     
-    return cleanedText;
-  }
-
-  private analyzeTextStructure(text: string): any {
-    const analysis = {
-      hasSpacedNumbers: false,
-      hasSpacedLetters: false,
-      spacingPattern: 'none',
-      documentStructure: 'unknown',
-      commonNumberPatterns: [] as string[],
-      likelyOCRIssues: false
-    };
-
-    // Detect spaced numbers (like "1 8 99", "2 0 2 4", etc.)
-    const spacedNumberMatches = text.match(/\b\d(\s+\d){1,4}\b/g);
-    if (spacedNumberMatches && spacedNumberMatches.length > 0) {
-      analysis.hasSpacedNumbers = true;
-      analysis.commonNumberPatterns = spacedNumberMatches;
-      analysis.likelyOCRIssues = true;
-    }
-
-    // Detect spaced letters (like "P r o d u c t")
-    const spacedLetterMatches = text.match(/\b[A-Za-z](\s+[A-Za-z]){2,}\b/g);
-    if (spacedLetterMatches && spacedLetterMatches.length > 2) {
-      analysis.hasSpacedLetters = true;
-      analysis.likelyOCRIssues = true;
-    }
-
-    // Detect document structure
-    if (text.toLowerCase().includes('product') && text.toLowerCase().includes('price')) {
-      analysis.documentStructure = 'product';
-    } else if (text.toLowerCase().includes('invoice') || text.toLowerCase().includes('bill')) {
-      analysis.documentStructure = 'invoice';
-    } else if (text.toLowerCase().includes('manual') || text.toLowerCase().includes('instruction')) {
-      analysis.documentStructure = 'manual';
-    }
-
-    return analysis;
-  }
-
-  private applyAdaptiveCleaning(text: string, analysis: any): string {
-    let cleanedText = text;
-
-    // If we detected spaced numbers, fix them intelligently
-    if (analysis.hasSpacedNumbers) {
-      // Fix 4-digit years (like "2 0 2 4" -> "2024")
-      cleanedText = cleanedText.replace(/\b(19|20)(\s+)(\d)(\s+)(\d)(\s+)(\d)\b/g, '$1$3$5$7');
-      
-      // Fix 3-4 digit prices/numbers (like "1 8 99" -> "1899")
-      cleanedText = cleanedText.replace(/\b(\d)(\s+)(\d)(\s+)(\d+)\b/g, '$1$3$5');
-      
-      // Fix 2-digit numbers (like "1 5" -> "15")
-      cleanedText = cleanedText.replace(/\b(\d)(\s+)(\d)\b/g, (match, d1, space, d2) => {
-        // Only fix if it looks like a meaningful number (not random digits)
-        const context = text.substring(text.indexOf(match) - 20, text.indexOf(match) + 20);
-        if (context.toLowerCase().includes('price') || 
-            context.toLowerCase().includes('cost') || 
-            context.toLowerCase().includes('amount') ||
-            context.includes('₹') || context.includes('rs')) {
-          return d1 + d2;
-        }
-        return match;
-      });
-    }
-
-    // If we detected spaced letters, fix common words
-    if (analysis.hasSpacedLetters) {
-      // Fix common spaced words
-      const commonWords = ['product', 'description', 'specification', 'price', 'features', 'benefits'];
-      commonWords.forEach(word => {
-        const spacedPattern = word.split('').join('\\s+');
-        const regex = new RegExp(`\\b${spacedPattern}\\b`, 'gi');
-        cleanedText = cleanedText.replace(regex, word);
-      });
-      
-      // General spaced letter fixing (more conservative)
-      cleanedText = cleanedText.replace(/\b([A-Za-z])\s+([A-Za-z])\s+([A-Za-z]+)\b/g, (match) => {
-        // Only fix if the result would be a reasonable word length
-        const unspaced = match.replace(/\s+/g, '');
-        if (unspaced.length <= 20) {
-          return unspaced;
-        }
-        return match;
-      });
-    }
-
     return cleanedText;
   }
 
@@ -1315,7 +1078,7 @@ GENERAL DOCUMENT - Ensure you capture:
     return wordQualityRatio > 0.7;
   }
 
-  async deleteDocumentFromVector(documentId: string): Promise<void> {
+  async deleteDocumentFromVector(documentId: number): Promise<void> {
     await qdrantService.deleteByDocumentId(documentId);
   }
 }
