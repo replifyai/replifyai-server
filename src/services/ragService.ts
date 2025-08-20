@@ -2,6 +2,7 @@ import { createEmbedding } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
+import { openai } from "./openai.js";
 
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
@@ -503,8 +504,8 @@ Examples:
     const systemPrompt = `You are a friendly, consultative sales agent.
 Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
 Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
-Constraints: ≤80 words; single short paragraph; no bullets, no numbered lists, no headings, no bold; factual only—do not invent features or pricing.
-If the request is ambiguous, ask exactly one focused clarifying question.
+Constraints: ≤80 words; single short paragraph; no bullets, no numbered lists, no headings, no bold; factual only do not invent features or pricing.
+
 
 Context:
 ${contextChunks.map(c => c.content).join('\n\n---\n\n')}

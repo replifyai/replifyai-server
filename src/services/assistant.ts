@@ -1,8 +1,5 @@
-import { env } from "../env.js";
-import { openai } from "./openai.js";
-import { generateGroqChatResponse } from "./groq.js";
 import { ragService } from "./ragService.js";
-
+import { inferenceProvider } from "./inference.js";
 export interface AssistantOptions {
   useRAG?: boolean;
   productName?: string;
@@ -48,9 +45,9 @@ async function detectProductIntent(
     "tell me a joke", "joke", "weather", "time", "date", "who are you",
     "what is your name", "repeat that", "can you repeat", "ok", "okay",
   ];
-  if (nonProductPhrases.some(p => text === p || text.includes(p))) {
-    return false;
-  }
+  // if (nonProductPhrases.some(p => text === p || text.includes(p))) {
+  //   return false;
+  // }
 
   // 2) Strong positive heuristics (no LLM needed for obvious product intent)
   const positiveKeywords = [
@@ -100,29 +97,13 @@ async function detectProductIntent(
       productName ? `Product: ${productName}` : undefined,
       `Message: ${utterance}`,
     ].filter(Boolean).join("\n");
-
-    if (env.GROQ_API_KEY) {
-      const raw = await generateGroqChatResponse(system, user, {
-        model: "llama-3.3-70b-versatile",
-        temperature: 0.0,
-        maxTokens: 120,
-      });
-      const parsed = safeParseUseRAG(raw);
-      if (typeof parsed === 'boolean') return parsed;
-    } else {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.0,
-        max_tokens: 120,
-      });
-      const content = response.choices[0]?.message?.content ?? "";
-      const parsed = safeParseUseRAG(content);
-      if (typeof parsed === 'boolean') return parsed;
-    }
+    const response = await inferenceProvider.chatCompletion(
+      system,
+      user,
+      { temperature: 0.1, maxTokens: 1000 }
+    )
+    const parsed = safeParseUseRAG(response);
+    if (typeof parsed === 'boolean') return parsed;
   } catch (e) {
     console.error("LLM intent classification failed:", e);
   }
@@ -157,9 +138,7 @@ export async function generateAssistantSuggestion(
   options: AssistantOptions = {}
 ): Promise<AssistantSuggestion> {
   const { useRAG, productName = "", model, temperature = 0.2 } = options;
-  const effectiveUseRAG = typeof useRAG === 'boolean'
-    ? useRAG
-    : await detectProductIntent(userUtterance, productName);
+  const effectiveUseRAG = await detectProductIntent(userUtterance, productName);
   console.log("🚀 ~ generateAssistantSuggestion ~ useRAG(effective):", effectiveUseRAG);
 
   // 1) If RAG requested, use existing pipeline
@@ -170,31 +149,12 @@ export async function generateAssistantSuggestion(
 
   // 2) Otherwise, generate a concise suggestion via LLM
   try {
-    if (env.GROQ_API_KEY) {
-      const reply = await generateGroqChatResponse(
-        DEFAULT_SYSTEM_PROMPT,
-        userUtterance,
-        {
-          model: model || "llama-3.1-8b-instant",
-          temperature,
-          maxTokens: 220,
-        }
-      );
-      return { suggestion: reply.trim() };
-    }
-
-    const response = await openai.chat.completions.create({
-      model: model || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: DEFAULT_SYSTEM_PROMPT },
-        { role: "user", content: userUtterance },
-      ],
-      temperature,
-      max_tokens: 220,
-    });
-    const suggestion = response.choices[0]?.message?.content?.trim() || "";
-    console.log("🚀 ~ generateAssistantSuggestion ~ suggestion:", suggestion);
-    return { suggestion };
+    const response = await inferenceProvider.chatCompletion(
+      DEFAULT_SYSTEM_PROMPT,
+      userUtterance,
+      { temperature: 0.1, maxTokens: 1000 }
+    )
+    return { suggestion: response.trim() };
   } catch (error) {
     console.error("Assistant suggestion generation failed:", error);
     return { suggestion: "" };
