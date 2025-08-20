@@ -18,6 +18,14 @@ export const env = {
   
   // Groq
   GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+
+  // LLM Provider selection
+  LLM_PROVIDER: process.env.LLM_PROVIDER || 'openai',
+
+  // Nebius Studio (OpenAI-compatible)
+  NEBIUS_API_KEY: process.env.NEBIUS_API_KEY || '',
+  NEBIUS_BASE_URL: process.env.NEBIUS_BASE_URL || '',
+  NEBIUS_MODEL: process.env.NEBIUS_MODEL || '',
   
   // Qdrant
   QDRANT_URL: process.env.QDRANT_URL || 'https://qdrant.example.com',

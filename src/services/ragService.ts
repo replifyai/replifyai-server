@@ -1,7 +1,7 @@
-import { createEmbedding, openai } from "./openai.js";
-import { generateGroqChatResponse } from "./groq.js";
+import { createEmbedding } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
+import { inferenceProvider } from "./inference.js";
 
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
@@ -118,6 +118,7 @@ export class RAGService {
       // Analyze response for missing context
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
 
+      console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData.usedChunkIds:", JSON.stringify(responseData?.usedChunkIds, null, 2));
       // Filter sources to only include chunks that were actually used
       const usedChunks = contextChunks.filter(chunk => 
         responseData.usedChunkIds.includes(chunk.id)
@@ -190,7 +191,7 @@ export class RAGService {
     3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."  
     
     ANSWERING RULES:
-    - Always cite source chunks like this: [USED_CHUNK: chunk_id]  
+    - Always cite source chunks like this: [USED_CHUNK: chunk_id] this is very important if you can't cite the chunks then the answer is of no value  
     - Be concise, accurate, and thorough.  
     - Do not assume, invent, or infer beyond the text.  
     - If multiple documents provide different info, clearly separate them.  
@@ -200,19 +201,12 @@ export class RAGService {
     `;
     
 
-    // Use OpenAI for generating the response
-    const response = await openai.chat.completions.create({
-      // model: "llama-3.1-8b-instant",
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: query }
-      ],
-      temperature: 0.1,
-      max_tokens: 1000,
-    });
-
-    const responseText = response.choices[0].message.content || "I couldn't generate a response.";
+    // Use provider-agnostic inference for generating the response
+    const responseText = await inferenceProvider.chatCompletion(
+      systemPrompt,
+      query,
+      { temperature: 0.1, maxTokens: 1000 }
+    );
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
@@ -245,12 +239,8 @@ export class RAGService {
     attributeType: string;
   }> {
     try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert query analyzer. Analyze the user's query to understand their specific intent and context requirements.
+      const responseText = await inferenceProvider.chatCompletion(
+        `You are an expert query analyzer. Analyze the user's query to understand their specific intent and context requirements.
 
 Your task is to identify:
 1. What the user is primarily looking for (primary intent)
@@ -273,19 +263,12 @@ Return a JSON object with this structure:
 Examples:
 - "What are the product dimensions?" → entity: "product", attribute: "dimensions", conflicting: ["packaging", "box", "container"]
 - "What is the packaging weight?" → entity: "package", attribute: "weight", conflicting: ["product", "item", "device"]
-- "How much does shipping cost?" → entity: "service", attribute: "price", conflicting: ["product", "item"]`
-          },
-          {
-            role: "user",
-            content: query
-          }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-        max_tokens: 500,
-      });
+- "How much does shipping cost?" → entity: "service", attribute: "price", conflicting: ["product", "item"]`,
+        query,
+        { temperature: 0.1, maxTokens: 500 }
+      );
 
-      const result = JSON.parse(response.choices[0].message.content || '{}');
+      const result = JSON.parse(responseText || '{}');
       return {
         primaryIntent: result.primaryIntent || 'General information',
         specificTerms: result.specificTerms || [],
