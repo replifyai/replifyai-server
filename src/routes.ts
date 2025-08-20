@@ -242,10 +242,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await documentProcessor.deleteDocumentFromVector(id);
       
       // Delete from storage
+      //@ts-ignore
       await storage.deleteDocument(id);
       
       res.json({ message: "Document deleted successfully" });
     } catch (error) {
+      //@ts-ignore
       console.error('Document deletion error:', JSON.stringify(error?.message, null, 2));
       res.status(500).json({ message: (error as Error).message });
     }

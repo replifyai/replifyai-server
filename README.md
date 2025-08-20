@@ -71,9 +71,16 @@ See `.env.example` for all required environment variables.
 
 Key variables:
 - `DATABASE_URL` - PostgreSQL connection string
-- `OPENAI_API_KEY` - OpenAI API key
 - `QDRANT_URL` - Qdrant database URL
 - `FRONTEND_URL` - Frontend URL for CORS (default: http://localhost:3000)
+
+AI providers:
+- `LLM_PROVIDER` - `openai` | `groq` | `nebius` (default: `openai`)
+- `OPENAI_API_KEY` - required when `LLM_PROVIDER=openai`
+- `GROQ_API_KEY` - required when `LLM_PROVIDER=groq`
+- `NEBIUS_API_KEY` - required when `LLM_PROVIDER=nebius`
+- `NEBIUS_BASE_URL` - optional (defaults to Nebius OpenAI-compatible endpoint)
+- `NEBIUS_MODEL` - optional (e.g., `meta-llama-3.1-70b-instruct`)
 
 ## Deployment
 
