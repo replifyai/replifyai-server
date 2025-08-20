@@ -2,6 +2,7 @@ import { createEmbedding } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
+import { openai } from "./openai.js";
 
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
@@ -52,8 +53,11 @@ export class RAGService {
     retrievalCount?: number;
     similarityThreshold?: number;
     productName?: string;
+    intent?: string;
   } = {}): Promise<RAGResponse> {
-    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "" } = options;
+    console.log("🚀 ~ RAGService ~ queryDocuments ~ query:", query);
+    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query" } = options;
+    console.log("🚀 ~ RAGService ~ productName:", productName);
     try {
       // Create embedding for the query
       const queryEmbedding = await createEmbedding(query);
@@ -98,6 +102,7 @@ export class RAGService {
 
       // Prepare context from search results with chunk IDs
       const contextChunks = sortedChunks.map((result, index) => {
+        console.log("🚀 ~ RAGService ~ queryDocuments ~ result:", result);
         let contextContent = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
         
         // Add complete metadata if available
@@ -113,7 +118,13 @@ export class RAGService {
       });
 
       // Generate response using OpenAI
-      const responseData = await this.generateResponse(query, contextChunks);
+      let responseData;
+      if(intent === "query"){
+        responseData = await this.generateResponse(query, contextChunks);
+      }else{
+        responseData = await this.generateSalesAgentResponse(query, contextChunks);
+      }
+      console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData:", responseData);
 
       // Analyze response for missing context
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
@@ -403,6 +414,125 @@ Examples:
     } catch (error: any) {
       return { status: "error", message: error.message };
     }
+  }
+
+  /**
+   * SALES AGENT MODE: Retrieve docs and generate a persuasive, consultative sales response
+   * without altering existing methods. Uses the same retrieval flow but a different prompt.
+   */
+  async queryDocumentsSalesAgent(query: string, options: {
+    retrievalCount?: number;
+    similarityThreshold?: number;
+    productName?: string;
+  } = {}): Promise<RAGResponse> {
+    const { retrievalCount = 20, similarityThreshold = 0.75, productName = "" } = options;
+    try {
+      const queryEmbedding = await createEmbedding(query);
+
+      const searchResults = await qdrantService.searchSimilar(
+        queryEmbedding,
+        retrievalCount,
+        similarityThreshold,
+        productName
+      );
+
+      if (searchResults.length === 0) {
+        const noResultsResponse = "I don't have enough information in the uploaded documents to tailor a recommendation. Could you share a bit more about your needs or upload relevant materials?";
+        const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
+        return {
+          query,
+          response: noResultsResponse,
+          sources: [],
+          contextAnalysis: { ...contextAnalysis, isContextMissing: true },
+        };
+      }
+
+      const sortedChunks = searchResults.sort((a, b) => b.score - a.score);
+
+      const contextChunks = sortedChunks.map((result, index) => {
+        let content = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
+        if (result.metadata) {
+          content += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
+        }
+        return { id: `chunk_${index}`, content, originalData: result };
+      });
+
+      const responseData = await this.generateSalesAgentResponse(query, contextChunks);
+
+      const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
+
+      const usedChunks = contextChunks.filter((c) => responseData.usedChunkIds.includes(c.id));
+      const uniqueSourceUrls = new Set<string>();
+      const sources = usedChunks
+        .filter((chunk) => {
+          const sourceUrl = chunk.originalData.metadata?.sourceUrl;
+          if (!sourceUrl || uniqueSourceUrls.has(sourceUrl)) return false;
+          uniqueSourceUrls.add(sourceUrl);
+          return true;
+        })
+        .map((chunk) => ({
+          documentId: chunk.originalData.documentId,
+          filename: chunk.originalData.filename,
+          content: '',
+          score: chunk.originalData.score,
+          metadata: [],
+          sourceUrl: chunk.originalData.metadata?.sourceUrl,
+          uploadType: chunk.originalData.metadata?.uploadType,
+        }));
+
+      return {
+        query,
+        response: responseData.response,
+        sources,
+        contextAnalysis,
+      };
+    } catch (error: any) {
+      console.error("RAG sales agent query failed:", error);
+      throw new Error(`Failed to process sales agent query: ${error.message}`);
+    }
+  }
+
+  /**
+   * SALES AGENT: Generate a persuasive, helpful response grounded ONLY in provided context.
+   * Returns response plus the chunk ids it referenced (same mechanism as the standard generator).
+   */
+  private async generateSalesAgentResponse(query: string, contextChunks: Array<{
+    id: string;
+    content: string;
+    originalData: any;
+  }>): Promise<{ response: string; usedChunkIds: string[] }> {
+    const systemPrompt = `You are a friendly, consultative sales agent.
+Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
+Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
+Constraints: ≤80 words; single short paragraph; no bullets, no numbered lists, no headings, no bold; factual only do not invent features or pricing.
+
+
+Context:
+${contextChunks.map(c => c.content).join('\n\n---\n\n')}
+
+IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: query },
+      ],
+      temperature: 0.4,
+      max_tokens: 240,
+    });
+
+    const responseText = response.choices[0]?.message?.content || "";
+
+    const usedChunkIds: string[] = [];
+    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+    let match;
+    while ((match = chunkIdPattern.exec(responseText)) !== null) {
+      if (!usedChunkIds.includes(match[1])) usedChunkIds.push(match[1]);
+    }
+
+    const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
+    return { response: cleanResponse, usedChunkIds };
   }
 }
 
