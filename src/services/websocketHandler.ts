@@ -1,12 +1,12 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { OpenAIRealtimeService, RealtimeEvent } from "./openaiRealtime.js";
+import { createTranscriptionService } from "./transcription";
 import { generateAssistantSuggestion } from "./assistant.js";
 
 interface ClientSession {
   id: string;
   client: WebSocket;
-  upstream?: OpenAIRealtimeService;
+  upstream?: ReturnType<typeof createTranscriptionService>;
   active: boolean;
 }
 
@@ -40,11 +40,22 @@ export class WebSocketHandler {
     try {
       msg = JSON.parse(raw.toString());
     } catch {
+      // If not JSON, try handling as binary chunk for Deepgram (opus/webm)
+      if (session.active && session.upstream && Buffer.isBuffer(raw)) {
+        try {
+          // @ts-ignore: Deepgram impl supports appendBinary
+          if (typeof (session.upstream as any).appendBinary === 'function') {
+            (session.upstream as any).appendBinary(raw);
+            return;
+          }
+        } catch {}
+      }
       return this.safeSend(session.client, { type: "error", message: "invalid_json" });
     }
 
     switch (msg.type) {
       case "start_transcription":
+        console.log("🚀 ~ WebSocketHandler ~ handleMessage ~ msg.options:", msg.options);
         if (session.active) return;
         await this.startUpstream(session, msg.options);
         break;
@@ -52,6 +63,19 @@ export class WebSocketHandler {
         if (!session.active || !session.upstream) return;
         try {
           session.upstream.appendAudio(msg.audio);
+        } catch (e) {
+          this.safeSend(session.client, { type: "error", message: "audio_forward_failed" });
+        }
+        break;
+      case "audio_binary":
+        if (!session.active || !session.upstream) return;
+        try {
+          const chunk: Buffer = Buffer.from(msg.data, msg.encoding === 'base64' ? 'base64' : undefined);
+          // @ts-ignore
+          if (typeof (session.upstream as any).appendBinary === 'function') {
+            // @ts-ignore
+            (session.upstream as any).appendBinary(chunk);
+          }
         } catch (e) {
           this.safeSend(session.client, { type: "error", message: "audio_forward_failed" });
         }
@@ -65,16 +89,18 @@ export class WebSocketHandler {
   }
 
   private async startUpstream(session: ClientSession, options: any): Promise<void> {
-    const upstream = new OpenAIRealtimeService({
+    const upstream = createTranscriptionService({
+      provider: options?.provider,
       model: options?.model ?? "whisper-1",
       language: options?.language,
       turnDetection: options?.turnDetection,
+      sampleRate: options?.sampleRate ?? 16000,
     });
 
-    upstream.on("conversation.item.input_audio_transcription.delta", (e: RealtimeEvent) => {
+    upstream.on("transcription.delta", (e: any) => {
       this.safeSend(session.client, { type: "transcription.delta", delta: e.delta });
     });
-    upstream.on("conversation.item.input_audio_transcription.completed", (e: RealtimeEvent) => {
+    upstream.on("transcription.completed", (e: any) => {
       const transcript: string = e.transcript || "";
       this.safeSend(session.client, { type: "transcription.completed", transcript });
 
@@ -92,27 +118,26 @@ export class WebSocketHandler {
             });
           }
         } catch (err) {
-          // non-fatal, just log
           console.error("assistant suggestion failed", err);
         }
       })();
     });
-    upstream.on("input_audio_buffer.speech_started", () => {
+    upstream.on("speech.started", () => {
       this.safeSend(session.client, { type: "speech.started" });
     });
-    upstream.on("input_audio_buffer.speech_stopped", () => {
+    upstream.on("speech.stopped", () => {
       this.safeSend(session.client, { type: "speech.stopped" });
     });
-    upstream.on("error", (e: RealtimeEvent) => {
+    upstream.on("error", (e: any) => {
       this.safeSend(session.client, { type: "error", message: e.error?.message ?? "upstream_error" });
     });
     upstream.on("connection.closed", () => {
-      this.safeSend(session.client, { type: "openai.disconnected" });
+      this.safeSend(session.client, { type: "stt.disconnected" });
     });
 
     try {
       await upstream.connect();
-      session.upstream = upstream;
+      session.upstream = upstream as any;
       session.active = true;
       this.safeSend(session.client, { type: "transcription.started" });
     } catch (e: any) {

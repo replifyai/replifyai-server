@@ -19,6 +19,10 @@ export const env = {
   // Groq
   GROQ_API_KEY: process.env.GROQ_API_KEY || '',
 
+  // Speech-to-text provider selection
+  SPEECH_PROVIDER: process.env.SPEECH_PROVIDER || 'openai',
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY || '',
+
   // LLM Provider selection
   LLM_PROVIDER: process.env.LLM_PROVIDER || 'openai',
 

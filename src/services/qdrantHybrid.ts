@@ -362,7 +362,12 @@ class QdrantCloudService {
         limit: Math.min(limit, 100), // Cap at 100 for performance
         score_threshold: scoreThreshold,
         with_payload: true,
-        with_vector: false // Don't return vectors to save bandwidth
+        with_vector: false, // Don't return vectors to save bandwidth
+        search_params: {
+          hnsw_ef: 64,
+          exact: false,
+          indexed_only: true
+        }
       };
       
       // Add filters if provided

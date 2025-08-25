@@ -11,6 +11,7 @@ export interface RealtimeTranscriptionOptions {
   };
   inputAudioFormat?: "pcm16" | "g711_ulaw" | "g711_alaw";
   language?: string;
+  sampleRate?: number;
 }
 
 export interface RealtimeEvent {
@@ -56,6 +57,16 @@ export class OpenAIRealtimeService {
         try {
           const event: RealtimeEvent = JSON.parse(data.toString());
           this.emit(event.type, event);
+          // Emit unified events for consumers
+          if (event.type === "conversation.item.input_audio_transcription.delta" && (event as any).delta) {
+            this.emit("transcription.delta", { type: "transcription.delta", delta: (event as any).delta });
+          } else if (event.type === "conversation.item.input_audio_transcription.completed") {
+            this.emit("transcription.completed", { type: "transcription.completed", transcript: (event as any).transcript || "" });
+          } else if (event.type === "input_audio_buffer.speech_started") {
+            this.emit("speech.started", { type: "speech.started" });
+          } else if (event.type === "input_audio_buffer.speech_stopped") {
+            this.emit("speech.stopped", { type: "speech.stopped" });
+          }
         } catch (err) {
           this.emit("error", { type: "error", error: err });
         }
@@ -80,7 +91,7 @@ export class OpenAIRealtimeService {
         input_audio_format: this.options.inputAudioFormat ?? "pcm16",
         input_audio_transcription: {
           model: this.options.model ?? "whisper-1",
-          language: "en",
+          language: this.options.language || "en",
           // ...(this.options.language ? { language: this.options.language } : {}), // add default language en-US
           // ...(this.options.model === "whisper-1" ? { language: "en-US" } : {}), // add default language en-US
         },
