@@ -45,5 +45,48 @@ export const inferenceProvider = {
       }
     }
   },
+
+  async *chatCompletionStream(
+    systemPrompt: string,
+    userPrompt: string,
+    options: ChatOptions = {}
+  ): AsyncGenerator<string> {
+    const provider = this.active;
+    
+    // For now, only OpenAI supports streaming
+    // Groq and Nebius will fall back to chunked response
+    if (provider === "openai") {
+      const { model = "gpt-4o-mini", temperature = 0.1, maxTokens = 1000 } = options;
+      const stream = await openai.chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature,
+        max_tokens: maxTokens,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
+      }
+    } else {
+      // Fallback: Get full response and yield in chunks
+      const fullResponse = await this.chatCompletion(systemPrompt, userPrompt, options);
+      const words = fullResponse.split(' ');
+      const chunkSize = 5; // Yield 5 words at a time
+      
+      for (let i = 0; i < words.length; i += chunkSize) {
+        const chunk = words.slice(i, i + chunkSize).join(' ');
+        yield chunk + (i + chunkSize < words.length ? ' ' : '');
+        // Add small delay to simulate streaming
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+  },
 };
 

@@ -11,6 +11,7 @@ import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
 import { qaIngestionService } from "./services/qaIngestionService.js";
 import { WebSocketHandler } from './services/websocketHandler.js';
+import { feedbackLearningService } from './services/feedbackLearning.js';
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -520,6 +521,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json({ message: "Batch job cancelled successfully" });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Feedback endpoints for continuous learning
+  
+  // Record user feedback
+  app.post("/api/feedback", async (req, res) => {
+    try {
+      const { query, response, sources, userFeedback, sessionContext, metadata } = req.body;
+      
+      if (!query || !response || !userFeedback) {
+        return res.status(400).json({ 
+          message: "Query, response, and userFeedback are required" 
+        });
+      }
+      
+      if (!['helpful', 'not_helpful'].includes(userFeedback)) {
+        return res.status(400).json({ 
+          message: "userFeedback must be 'helpful' or 'not_helpful'" 
+        });
+      }
+      
+      await feedbackLearningService.recordFeedback({
+        query,
+        response,
+        sources: sources || [],
+        userFeedback,
+        timestamp: new Date(),
+        sessionContext,
+        metadata
+      });
+      
+      res.json({ message: "Feedback recorded successfully" });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+  
+  // Get learning insights
+  app.get("/api/feedback/insights", async (req, res) => {
+    try {
+      const insights = await feedbackLearningService.getLearningInsights();
+      res.json({ insights });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+  
+  // Get query recommendations based on feedback
+  app.post("/api/feedback/recommendations", async (req, res) => {
+    try {
+      const { query } = req.body;
+      
+      if (!query) {
+        return res.status(400).json({ message: "Query is required" });
+      }
+      
+      const recommendations = await feedbackLearningService.getQueryRecommendations(query);
+      res.json(recommendations);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
     }

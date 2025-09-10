@@ -22,7 +22,6 @@ export interface TranscriptionService {
 
 export function createTranscriptionService(opts: RealtimeTranscriptionOptions = {}): TranscriptionService {
   const provider = (opts.provider ?? env.SPEECH_PROVIDER ?? "openai").toLowerCase();
-  console.log("🚀 ~ createTranscriptionService ~ provider:", provider);
   const normalized = normalizeLanguage(opts.language);
   if (provider === "deepgram") {
     return new DeepgramRealtimeService({
@@ -31,10 +30,15 @@ export function createTranscriptionService(opts: RealtimeTranscriptionOptions = 
       punctuate: true,
       interimResults: true,
       vadEvents: true,
-      model: "nova-2-general",
+      model: opts?.model || "nova-2-general",
       encoding: (opts.audioEncoding === "opus") ? "opus" : "linear16",
       container: opts.audioEncoding === "opus" ? (opts.audioContainer ?? "webm") : undefined,
       channels: opts.channels ?? 1,
+      summarize:'v2',
+      topics: true,
+      intents: true,
+      detect_entities: true,
+      sentiment: true,
     });
   }
   return new OpenAIRealtimeService({ ...opts, language: mapLanguageForOpenAI(normalized) });

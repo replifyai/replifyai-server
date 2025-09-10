@@ -12,6 +12,11 @@ export interface DGTranscriptionOptions {
   container?: "webm" | "ogg"; // for opus streams
   channels?: number; // 1 by default
   keepalivePingMs?: number; // ping interval to keep connection alive
+  summarize?: string;
+  topics?: boolean;
+  intents?: boolean;
+  detect_entities?: boolean;
+  sentiment?: boolean;
 }
 
 export interface RealtimeEvent {

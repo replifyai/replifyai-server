@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
 import { createTranscriptionService } from "./transcription.js";
-import { generateAssistantSuggestion } from "./assistant.js";
+import { generateAssistantSuggestion, streamAssistantSuggestion } from "./assistant.js";
 
 interface ClientSession {
   id: string;
@@ -83,12 +83,21 @@ export class WebSocketHandler {
       case "stop_transcription":
         this.stopUpstream(session);
         break;
+      case "user.message":
+        // Handle direct text messages (not audio transcription)
+        await this.handleTextMessage(session, msg);
+        break;
       default:
         this.safeSend(session.client, { type: "error", message: "unknown_message_type" });
     }
   }
 
   private async startUpstream(session: ClientSession, options: any): Promise<void> {
+    // Store productName in session if provided
+    if (options?.productName) {
+      (session as any).productName = options.productName;
+    }
+    
     const upstream = createTranscriptionService({
       provider: options?.provider,
       model: options?.model ?? "whisper-1",
@@ -104,21 +113,60 @@ export class WebSocketHandler {
       const transcript: string = e.transcript || "";
       this.safeSend(session.client, { type: "transcription.completed", transcript });
 
-      // Fire-and-forget: generate assistant suggestion without blocking stream
+      // Fire-and-forget: generate assistant suggestion with streaming
       (async () => {
         try {
-          const suggestion = await generateAssistantSuggestion(transcript, {
-            // optional switches can be added later (e.g., useRAG, productName)
-          });
-          if (suggestion.suggestion) {
-            this.safeSend(session.client, {
-              type: "assistant.suggestion",
-              text: suggestion.suggestion,
-              sources: suggestion.sources ?? [],
+          // Check if client wants streaming (can be configured via options)
+          const enableStreaming = true; // TODO: make this configurable
+          
+          if (enableStreaming) {
+            await streamAssistantSuggestion(
+              transcript, 
+              {
+                // Pass productName from session if available
+                productName: (session as any).productName || ""
+              },
+              {
+                onDelta: (delta) => {
+                  this.safeSend(session.client, {
+                    type: "assistant.suggestion.delta",
+                    delta,
+                  });
+                },
+                onCompleted: (suggestion) => {
+                  this.safeSend(session.client, {
+                    type: "assistant.suggestion.completed",
+                    ...suggestion,
+                  });
+                },
+                onError: (error) => {
+                  this.safeSend(session.client, {
+                    type: "assistant.suggestion.error",
+                    message: error.message,
+                  });
+                }
+              }
+            );
+          } else {
+            // Fallback to non-streaming
+            const suggestion = await generateAssistantSuggestion(transcript, {
+              // Pass productName from session if available
+              productName: (session as any).productName || ""
             });
+            if (suggestion.suggestion) {
+              this.safeSend(session.client, {
+                type: "assistant.suggestion",
+                text: suggestion.suggestion,
+                sources: suggestion.sources ?? [],
+              });
+            }
           }
         } catch (err) {
           console.error("assistant suggestion failed", err);
+          this.safeSend(session.client, {
+            type: "assistant.suggestion.error",
+            message: "Failed to generate suggestion",
+          });
         }
       })();
     });
@@ -155,6 +203,77 @@ export class WebSocketHandler {
     session.upstream.disconnect();
     session.active = false;
     this.safeSend(session.client, { type: "transcription.stopped" });
+  }
+
+  private async handleTextMessage(session: ClientSession, msg: any): Promise<void> {
+    const { message, productName, streaming = true, includeMetadata = false } = msg;
+    
+    if (!message) {
+      return this.safeSend(session.client, { type: "error", message: "Message text is required" });
+    }
+
+    // Send acknowledgment
+    this.safeSend(session.client, { type: "message.received", message });
+
+    try {
+      if (streaming) {
+        // Use streaming response
+        await streamAssistantSuggestion(
+          message, 
+          { productName },
+          {
+            onDelta: (delta) => {
+              this.safeSend(session.client, {
+                type: "assistant.suggestion.delta",
+                delta,
+              });
+            },
+            onCompleted: (suggestion) => {
+              const response: any = {
+                type: "assistant.suggestion.completed",
+                ...suggestion,
+              };
+              
+              // Include metadata if requested
+              if (!includeMetadata) {
+                delete response.decisionPath;
+                delete response.displayFormat;
+              }
+              
+              this.safeSend(session.client, response);
+            },
+            onError: (error) => {
+              this.safeSend(session.client, {
+                type: "assistant.suggestion.error",
+                message: error.message,
+              });
+            }
+          }
+        );
+      } else {
+        // Use non-streaming response
+        const suggestion = await generateAssistantSuggestion(message, { productName });
+        
+        const response: any = {
+          type: "assistant.suggestion",
+          text: suggestion.suggestion,
+          sources: suggestion.sources ?? [],
+        };
+        
+        if (includeMetadata) {
+          response.displayFormat = suggestion.displayFormat;
+          response.decisionPath = suggestion.decisionPath;
+        }
+        
+        this.safeSend(session.client, response);
+      }
+    } catch (error) {
+      console.error("Error handling text message:", error);
+      this.safeSend(session.client, {
+        type: "assistant.suggestion.error",
+        message: "Failed to generate response",
+      });
+    }
   }
 
   private cleanup(id: string): void {

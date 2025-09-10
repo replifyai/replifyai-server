@@ -1,5 +1,8 @@
-import { ragService } from "./ragService.js";
+import { ragService, RAGStreamEvent } from "./ragService.js";
 import { inferenceProvider } from "./inference.js";
+import { decisionTreeService, DecisionStep } from "./decisionTree.js";
+import { smartDisplayService, DisplayFormat } from "./smartDisplay.js";
+import { modelRouterService } from "./modelRouter.js";
 export interface AssistantOptions {
   useRAG?: boolean;
   productName?: string;
@@ -18,6 +21,8 @@ export interface AssistantSuggestion {
     sourceUrl?: string;
     uploadType?: string;
   }>;
+  displayFormat?: DisplayFormat;
+  decisionPath?: DecisionStep[];
 }
 
 const DEFAULT_SYSTEM_PROMPT = `
@@ -133,6 +138,118 @@ function safeParseUseRAG(text: string): boolean | null {
   }
 }
 
+/**
+ * Stream assistant suggestion with real-time generation
+ * Integrates decision tree routing and smart display formatting
+ */
+export async function streamAssistantSuggestion(
+  userUtterance: string,
+  options: AssistantOptions = {},
+  callbacks: {
+    onDelta: (delta: string) => void,
+    onCompleted: (suggestion: Omit<AssistantSuggestion, 'suggestion'>) => void,
+    onError: (error: Error) => void,
+  }
+): Promise<void> {
+  const { productName = "" } = options;
+  
+  try {
+    // Step 1: Use decision tree to determine routing
+    const decisionResult = await decisionTreeService.execute('main', {
+      query: userUtterance,
+      productName,
+      previousDecisions: [],
+      metadata: {}
+    });
+
+    const decision = decisionResult.result;
+    console.log("Decision tree result:", decisionTreeService.visualizePath(decisionResult));
+
+    // Step 2: Route to appropriate model based on decision
+    const modelDecision = await modelRouterService.routeTask({
+      taskType: decision.useRAG ? 'complex_analysis' : 'simple_qa',
+      complexity: decision.useRAG ? 7 : 3,
+      contextSize: decision.useRAG ? 2000 : 500,
+      latencySensitive: true,
+      qualityRequired: decision.confidence > 0.8 ? 8 : 6
+    });
+
+    console.log(`Model routing: ${modelDecision.provider}/${modelDecision.model} - ${modelDecision.reasoning}`);
+
+    // Step 3: Handle based on decision
+    if (decisionResult.impossibleFlag) {
+      // Impossible flag set - return helpful message
+      callbacks.onDelta(decision.suggestion || "I don't have information about that in the available documents.");
+      callbacks.onCompleted({
+        sources: [],
+        displayFormat: { type: 'text', data: null },
+        decisionPath: decisionResult.decisions
+      });
+      return;
+    }
+
+    if (decision.useRAG) {
+      // Use RAG with streaming - use "query" intent to match the regular API call
+      const stream = ragService.streamQueryDocuments(userUtterance, { 
+        productName, 
+        intent: options?.intent || "query" 
+      });
+      
+      let finalSources: AssistantSuggestion['sources'] = [];
+      let contextAnalysis: any = null;
+
+      for await (const event of stream) {
+        if (event.type === 'delta') {
+          callbacks.onDelta(event.payload);
+        } else if (event.type === 'sources') {
+          finalSources = event.payload;
+        } else if (event.type === 'analysis') {
+          contextAnalysis = event.payload;
+        } else if (event.type === 'error') {
+          throw new Error(event.payload);
+        }
+      }
+
+      // Analyze display format
+      const displayFormat = smartDisplayService.analyze(finalSources || [], userUtterance);
+
+      callbacks.onCompleted({ 
+        sources: finalSources, 
+        displayFormat,
+        decisionPath: decisionResult.decisions
+      });
+
+    } else {
+      // Non-RAG streaming with selected model
+      // For now, use the default provider instead of model routing
+      // TODO: Implement proper provider switching in inference service
+      const stream = inferenceProvider.chatCompletionStream(
+        DEFAULT_SYSTEM_PROMPT,
+        userUtterance,
+        { 
+          temperature: 0.1, 
+          maxTokens: 1000
+          // Temporarily disabled model routing due to provider mismatch
+          // model: modelDecision.model
+        }
+      );
+
+      for await (const chunk of stream) {
+        callbacks.onDelta(chunk);
+      }
+
+      callbacks.onCompleted({ 
+        sources: [], 
+        displayFormat: { type: 'text', data: null },
+        decisionPath: decisionResult.decisions
+      });
+    }
+  } catch (error) {
+    console.error("Assistant suggestion stream failed:", error);
+    callbacks.onError(error as Error);
+  }
+}
+
 export async function generateAssistantSuggestion(
   userUtterance: string,
   options: AssistantOptions = {}
@@ -141,9 +258,9 @@ export async function generateAssistantSuggestion(
   const effectiveUseRAG = await detectProductIntent(userUtterance, productName);
   console.log("🚀 ~ generateAssistantSuggestion ~ useRAG(effective):", effectiveUseRAG);
 
-  // 1) If RAG requested, use existing pipeline
+  // 1) If RAG requested, use existing pipeline - use "query" intent to match the regular API call
   if (effectiveUseRAG) {
-    const rag = await ragService.queryDocuments(userUtterance, { productName, retrievalCount: 5, similarityThreshold: 0.70, intent: "sales" });
+    const rag = await ragService.queryDocuments(userUtterance, { productName, retrievalCount: 5, similarityThreshold: 0.70, intent: "query" });
     return { suggestion: rag.response, sources: rag.sources };
   }
 

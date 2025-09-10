@@ -27,6 +27,11 @@ export interface RAGResponse {
   contextAnalysis: ContextMissingAnalysis;
 }
 
+export interface RAGStreamEvent {
+  type: 'delta' | 'sources' | 'analysis' | 'error' | 'complete';
+  payload: any;
+}
+
 export class RAGService {
   // Patterns that indicate missing context
   private readonly MISSING_CONTEXT_PATTERNS = [
@@ -56,7 +61,7 @@ export class RAGService {
     intent?: string;
   } = {}): Promise<RAGResponse> {
     console.log("🚀 ~ RAGService ~ queryDocuments ~ query:", query);
-    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query" } = options;
+    const { retrievalCount = 3, similarityThreshold = 0.75, productName = "",intent = "query" } = options;
     console.log("🚀 ~ RAGService ~ productName:", productName);
     try {
       // Create embedding for the query
@@ -533,6 +538,148 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
 
     const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
     return { response: cleanResponse, usedChunkIds };
+  }
+
+  /**
+   * Stream query documents with real-time response generation
+   */
+  async *streamQueryDocuments(query: string, options: {
+    retrievalCount?: number;
+    similarityThreshold?: number;
+    productName?: string;
+    intent?: string;
+  } = {}): AsyncGenerator<RAGStreamEvent> {
+    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "", intent = "query" } = options;
+    
+    try {
+      // Step 1: Create embedding and search
+      const queryEmbedding = await createEmbedding(query);
+      const searchResults = await qdrantService.searchSimilar(
+        queryEmbedding,
+        retrievalCount,
+        similarityThreshold,
+        productName
+      );
+
+      if (searchResults.length === 0) {
+        const noResultsMessage = "I don't have enough information in the uploaded documents to answer this question.";
+        yield { type: 'delta', payload: noResultsMessage };
+        yield { type: 'sources', payload: [] };
+        yield { 
+          type: 'analysis', 
+          payload: {
+            isContextMissing: true,
+            suggestedTopics: ['Upload relevant documents'],
+            category: 'no_context',
+            priority: 'high'
+          }
+        };
+        yield { type: 'complete', payload: null };
+        return;
+      }
+
+      // Step 2: Sort and prepare chunks
+      const sortedChunks = searchResults.sort((a, b) => b.score - a.score);
+      const contextChunks = sortedChunks.map((result, index) => ({
+        id: `chunk_${index}`,
+        content: `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`,
+        originalData: result
+      }));
+
+      // Step 3: Stream response generation
+      const systemPrompt = this.buildStreamingPrompt(query, contextChunks, intent);
+      const stream = await inferenceProvider.chatCompletionStream(
+        systemPrompt,
+        query,
+        { temperature: 0.1, maxTokens: 1000 }
+      );
+
+      let fullResponse = '';
+      const usedChunkIds: string[] = [];
+
+      // Stream the response chunks
+      for await (const chunk of stream) {
+        fullResponse += chunk;
+        yield { type: 'delta', payload: chunk };
+        
+        // Check for chunk references in the accumulated response
+        const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+        let match;
+        while ((match = chunkIdPattern.exec(fullResponse)) !== null) {
+          if (!usedChunkIds.includes(match[1])) {
+            usedChunkIds.push(match[1]);
+          }
+        }
+      }
+
+      // Step 4: Process and send sources
+      const usedChunks = contextChunks.filter(chunk => usedChunkIds.includes(chunk.id));
+      console.log("🚀 ~ RAGService ~ streamQueryDocuments ~ usedChunks:", usedChunks);
+      const uniqueSourceUrls = new Set<string>();
+      const sources = usedChunks
+        .filter(chunk => {
+          const sourceUrl = chunk.originalData.metadata?.sourceUrl;
+          if (!sourceUrl || uniqueSourceUrls.has(sourceUrl)) return false;
+          uniqueSourceUrls.add(sourceUrl);
+          return true;
+        })
+        .map(chunk => ({
+          documentId: chunk.originalData.documentId,
+          filename: chunk.originalData.filename,
+          content: '',
+          score: chunk.originalData.score,
+          metadata: [],
+          sourceUrl: chunk.originalData.metadata?.sourceUrl,
+          uploadType: chunk.originalData.metadata?.uploadType,
+        }));
+
+      yield { type: 'sources', payload: sources };
+
+      // Step 5: Analyze for missing context
+      const cleanedResponse = fullResponse.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
+      const contextAnalysis = this.analyzeForMissingContext(query, cleanedResponse);
+      yield { type: 'analysis', payload: contextAnalysis };
+
+      yield { type: 'complete', payload: null };
+
+    } catch (error: any) {
+      console.error("RAG streaming failed:", error);
+      yield { type: 'error', payload: error.message };
+    }
+  }
+
+  private buildStreamingPrompt(
+    query: string, 
+    contextChunks: Array<{ id: string; content: string; originalData: any }>,
+    intent: string
+  ): string {
+    console.log("🚀 ~ RAGService ~ buildStreamingPrompt ~ intent:", intent);
+    if (intent === 'sales') {
+      return `You are a friendly, consultative sales agent.
+Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
+Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
+Constraints: ≤80 words; single short paragraph; no bullets, no numbered lists, no headings, no bold; factual only.
+
+QUERY: ${query}
+
+Context:
+${contextChunks.map(c => c.content).join('\n\n---\n\n')}
+
+IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]`;
+    }
+
+    return `You are an AI assistant that must answer questions **only** using the provided context.
+    
+QUERY: ${query}
+
+CRITICAL INSTRUCTIONS:
+1. Use only the provided context for answers.
+2. Always give detailed answers with as much information as possible. 
+2. Always cite source chunks: [USED_CHUNK: chunk_id], If you can't cite the chunks then the answer is of no value
+3. If the exact answer is missing, say: "I don't have enough information in the uploaded documents."
+
+Context from uploaded documents:
+${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
   }
 }
 
