@@ -264,7 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await ragService.queryDocuments(message, {
-        retrievalCount: retrievalCount || 3,
+        retrievalCount: retrievalCount || 5,
         similarityThreshold: similarityThreshold ||  0.75,
         productName:productName
       });

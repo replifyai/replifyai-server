@@ -202,10 +202,17 @@ export class RAGService {
     3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."  
     
     ANSWERING RULES:
-    - Always cite source chunks like this: [USED_CHUNK: chunk_id] this is very important if you can't cite the chunks then the answer is of no value  
-    - Be concise, accurate, and thorough.  
-    - Do not assume, invent, or infer beyond the text.  
-    - If multiple documents provide different info, clearly separate them.  
+
+Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
+[USED_CHUNK: chunk_id].
+
+Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
+
+Structured Response: Present answers in multiple sentences or bullet points, not a single line, so the response is detailed yet clear.
+
+Separation of Sources: If multiple chunks or documents provide overlapping or differing details, present them clearly under separate points, explicitly identifying their sources.
+
+Conciseness with Depth: Be concise but ensure the response captures every relevant property mentioned in the context.
     
     Context from uploaded documents:  
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}

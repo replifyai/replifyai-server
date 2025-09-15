@@ -31,15 +31,15 @@ export const inferenceProvider = {
         return generateNebiusChatResponse(systemPrompt, userPrompt, options);
       case "openai":
       default: {
-        const { model = "gpt-4o-mini", temperature = 0.1, maxTokens = 1000 } = options;
+        const { model = "gpt-5", temperature = 0.1, maxTokens = 1000 } = options;
         const response = await openai.chat.completions.create({
           model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
-          temperature,
-          max_tokens: maxTokens,
+          // temperature,
+          max_completion_tokens: maxTokens,
         });
         return response.choices[0]?.message?.content || "I couldn't generate a response.";
       }

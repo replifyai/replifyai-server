@@ -341,7 +341,7 @@ class QdrantCloudService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 10, 
+    limit: number = 5, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {
@@ -479,7 +479,7 @@ export class QdrantService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 10, 
+    limit: number = 5, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {
