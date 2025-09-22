@@ -15,9 +15,11 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "setup-env": "node scripts/setup-env.js",
-    "create-qdrant-index": "tsx scripts/create-qdrant-index.ts"
+    "create-qdrant-index": "tsx scripts/create-qdrant-index.ts",
+    "test-audio": "node scripts/test-audio-analysis.js"
   },
   "dependencies": {
+    "@deepgram/sdk": "^4.11.2",
     "@neondatabase/serverless": "^0.10.4",
     "@qdrant/js-client-rest": "^1.15.0",
     "@types/multer": "^1.4.13",

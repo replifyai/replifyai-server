@@ -11,6 +11,8 @@ import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
 import { qaIngestionService } from "./services/qaIngestionService.js";
 import { WebSocketHandler } from './services/websocketHandler.js';
+import { audioInsightsService } from './services/audioInsightsService.js';
+import { createClient } from '@deepgram/sdk';
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -21,6 +23,23 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('Unsupported file type. Only PDF, DOCX, and TXT files are allowed.'));
+    }
+  }
+});
+
+// Audio upload configuration
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for audio files
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/m4a',
+      'audio/ogg', 'audio/webm', 'audio/flac', 'audio/aac'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Unsupported audio file type. Supported formats: WAV, MP3, MP4, M4A, OGG, WEBM, FLAC, AAC'));
     }
   }
 });
@@ -542,6 +561,278 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Audio analysis endpoint
+  app.post("/api/audio/analyze", audioUpload.single("audio"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No audio file uploaded" });
+      }
+
+      const { originalname, mimetype, size, buffer } = req.file;
+      const { 
+        chunkDuration = 45,
+        enableSpeakerIdentification = true,
+        enableSentimentAnalysis = true,
+        enableToneAnalysis = true,
+        language = 'en',
+        model = 'openai',
+        provider = 'openai'
+      } = req.body;
+
+      console.log(`Starting audio analysis for file: ${originalname} (${size} bytes)`);
+
+      // Analyze the audio file
+      const result = await audioInsightsService.analyzeAudioFile(buffer, originalname, {
+        chunkDuration: parseInt(chunkDuration),
+        enableSpeakerIdentification: enableSpeakerIdentification === 'true',
+        enableSentimentAnalysis: enableSentimentAnalysis === 'true',
+        enableToneAnalysis: enableToneAnalysis === 'true',
+        // language,
+        model,
+        provider
+      });
+
+      if (!result.success) {
+        return res.status(500).json({ 
+          message: "Audio analysis failed", 
+          error: result.error,
+          processingTime: result.processingTime
+        });
+      }
+
+      console.log(`Audio analysis completed in ${result.processingTime}ms`);
+
+      // Return the insights
+      res.json({
+        success: true,
+        insights: result.insights,
+        processingTime: result.processingTime,
+        stats: audioInsightsService.getAnalysisStats(result.insights!)
+      });
+
+    } catch (error) {
+      console.error('Audio analysis endpoint error:', error);
+      res.status(500).json({ 
+        message: "Audio analysis failed", 
+        error: (error as Error).message 
+      });
+    }
+  });
+
+  // Get audio analysis statistics
+  app.get("/api/audio/stats", async (req, res) => {
+    try {
+      // This could be expanded to return system-wide audio analysis statistics
+      res.json({
+        message: "Audio analysis service is running",
+        supportedFormats: [
+          'WAV', 'MP3', 'MP4', 'M4A', 'OGG', 'WEBM', 'FLAC', 'AAC'
+        ],
+        maxFileSize: '50MB',
+        features: [
+          'Transcription',
+          'Speaker Identification',
+          'Sentiment Analysis',
+          'Tone Analysis',
+          'Audio Chunking',
+          'Conversation Flow Analysis'
+        ]
+      });
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Deepgram audio analyzer endpoint
+  app.post("/api/audio/deepgram-analyze", audioUpload.single("audio"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No audio file uploaded" });
+      }
+
+      const { originalname, mimetype, size, buffer } = req.file;
+      const { 
+        model = 'nova-3',
+        language = 'en',
+        summarize = 'true',
+        topics = true,
+        intents = true,
+        detect_entities = true,
+        sentiment = true,
+        smart_format = false,
+        keyterm = [],
+        punctuate = true,
+        paragraphs = false,
+        utterances = true,
+        redact = [],
+        diarize = true,
+        filler_words = true
+      } = req.body;
+
+      console.log(`Starting Deepgram analysis for file: ${originalname} (${size} bytes)`);
+
+      // Initialize Deepgram client
+      const deepgramApiKey = process.env.DEEPGRAM_API_KEY || '99171406687f94dce284c507ed806f365e249f96';
+      const deepgram = createClient(deepgramApiKey);
+
+      // Convert buffer to base64 for Deepgram API
+      const base64Audio = buffer.toString('base64');
+
+      // Configure options based on language
+      let transcriptionOptions;
+      if (language === 'hi') {
+        // Hindi-specific options
+        transcriptionOptions =  {
+          model: 'nova-2',
+          language: 'hi-Latn',
+          paragraphs: true,
+          utterances: true,
+          utt_split: 0.8,
+          keywords: [':'],
+          diarize: true,
+        };
+      } else {
+        // Default options for other languages
+        transcriptionOptions = {
+          model,
+          language,
+          summarize: summarize === 'true' ? 'v2' : false,
+          topics: topics === 'true',
+          intents: intents === 'true',
+          detect_entities: detect_entities === 'true',
+          sentiment: sentiment === 'true',
+          smart_format: smart_format === 'true',
+          keyterm: Array.isArray(keyterm) ? keyterm : [],
+          punctuate: punctuate === 'true',
+          paragraphs: paragraphs === 'true',
+          utterances: utterances === 'true',
+          redact: Array.isArray(redact) ? redact : [],
+          diarize: diarize === 'true',
+          filler_words: filler_words === 'true',
+        };
+      }
+
+      console.log("🚀 ~ registerRoutes ~ transcriptionOptions:", transcriptionOptions);
+      const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
+        buffer,
+        transcriptionOptions
+      );
+
+      if (error) {
+        console.error('Deepgram error:', error);
+        return res.status(500).json({ 
+          message: "Deepgram analysis failed", 
+          error: error.message || 'Unknown error'
+        });
+      }
+
+      console.log(`Deepgram analysis completed for ${originalname}`);
+
+      // Return the analysis result
+      res.json({
+        success: true,
+        filename: originalname,
+        fileSize: size,
+        analysis: result,
+        processingTime: Date.now() // You might want to track actual processing time
+      });
+
+    } catch (error) {
+      console.error('Deepgram analysis endpoint error:', error);
+      res.status(500).json({ 
+        message: "Deepgram analysis failed", 
+        error: (error as Error).message 
+      });
+    }
+  });
+
+  // Deepgram URL analyzer endpoint (for analyzing audio from URLs)
+  app.post("/api/audio/deepgram-analyze-url", async (req, res) => {
+    try {
+      const { 
+        url, 
+        model = 'nova-3', 
+        language = 'en', 
+        summarize = 'v2', 
+        topics = true, 
+        intents = true, 
+        detect_entities = true,
+        sentiment = true, 
+        smart_format = true, 
+        keyterm = [],
+        punctuate = true,
+        paragraphs = true,
+        utterances = true,
+        redact = [],
+        diarize = true,
+        filler_words = true
+      } = req.body;
+
+      if (!url) {
+        return res.status(400).json({ message: "URL is required" });
+      }
+
+      // Validate URL format
+      try {
+        new URL(url);
+      } catch {
+        return res.status(400).json({ message: "Invalid URL format" });
+      }
+
+      console.log(`Starting Deepgram URL analysis for: ${url}`);
+
+      // Initialize Deepgram client
+      const deepgramApiKey = process.env.DEEPGRAM_API_KEY || '99171406687f94dce284c507ed806f365e249f96';
+      const deepgram = createClient(deepgramApiKey);
+
+      const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
+        { url },
+        {
+          model,
+          language,
+          summarize: summarize === 'v2' ? 'v2' : false,
+          topics: topics === 'true',
+          intents: intents === 'true',
+          detect_entities: detect_entities === 'true',
+          sentiment: sentiment === 'true',
+          smart_format: smart_format === 'true',
+          keyterm: Array.isArray(keyterm) ? keyterm : [],
+          punctuate: punctuate === 'true',
+          paragraphs: paragraphs === 'true',
+          utterances: utterances === 'true',
+          redact: Array.isArray(redact) ? redact : [],
+          diarize: diarize === 'true',
+          filler_words: filler_words === 'true',
+        }
+      );
+
+      if (error) {
+        console.error('Deepgram URL error:', error);
+        return res.status(500).json({ 
+          message: "Deepgram URL analysis failed", 
+          error: error.message || 'Unknown error'
+        });
+      }
+
+      console.log(`Deepgram URL analysis completed for ${url}`);
+
+      // Return the analysis result
+      res.json({
+        success: true,
+        url,
+        analysis: result,
+        processingTime: Date.now() // You might want to track actual processing time
+      });
+
+    } catch (error) {
+      console.error('Deepgram URL analysis endpoint error:', error);
+      res.status(500).json({ 
+        message: "Deepgram URL analysis failed", 
+        error: (error as Error).message 
+      });
     }
   });
 
