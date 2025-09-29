@@ -199,7 +199,11 @@ export class RAGService {
     CRITICAL INSTRUCTIONS:
     1. Use only the provided context for answers — never use external knowledge.  
     2. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.  
-    3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."  
+    3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."
+    4. Do not use the word "chunk","document","source","context" in your response.
+    5. You are a helpful assistant, helping a sales agent.
+    6. Whatever response you give, Will be directly used by the sales agent to answer the user's question, so make sure your response answers the question and is detailed.
+    7. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
     
     ANSWERING RULES:
 
