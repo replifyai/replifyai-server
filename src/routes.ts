@@ -545,6 +545,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Sample test POST endpoint
+  app.post("/api/test", async (req, res) => {
+    try {
+      // Log the received payload
+      console.log("=== Test POST Endpoint Called ===");
+      console.log("Headers:", JSON.stringify(req.headers, null, 2));
+      console.log("Body:", JSON.stringify(req.body, null, 2));
+      console.log("Query params:", JSON.stringify(req.query, null, 2));
+      console.log("Timestamp:", new Date().toISOString());
+      console.log("=================================");
+
+      // Return the received payload with additional metadata
+      const response = {
+        message: "Test endpoint successfully received payload",
+        receivedAt: new Date().toISOString(),
+        payload: req.body,
+        headers: req.headers,
+        query: req.query,
+        method: req.method,
+        url: req.url,
+        ip: req.ip || req.connection.remoteAddress
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error("Test endpoint error:", error);
+      res.status(500).json({ 
+        message: "Test endpoint error", 
+        error: (error as Error).message 
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   // Initialize WebSocket handler for realtime transcription
   new WebSocketHandler(httpServer);
