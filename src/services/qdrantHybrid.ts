@@ -119,12 +119,12 @@ class QdrantCloudService {
       // Create the collection with updated parameters
       await this.client.createCollection(this.collectionName, {
         vectors: {
-          size: 1536,
+          size: 4096,
           distance: "Cosine"
         }
       });
 
-      console.log(`Created collection ${this.collectionName} with 1536 dimensions`);
+      console.log(`Created collection ${this.collectionName} with 4096 dimensions`);
       
       // Create required indexes after collection creation
       await this.ensureIndexes();
@@ -173,19 +173,19 @@ class QdrantCloudService {
       return;
     }
 
-    await this.ensureCollection();
+    // await this.ensureCollection();
     
     // Validate collection configuration
-    try {
-      const collectionInfo = await this.getCollectionInfo();
-      console.log('Collection info:', {
-        vectorSize: collectionInfo.result?.config?.params?.vectors?.size,
-        distance: collectionInfo.result?.config?.params?.vectors?.distance,
-        pointsCount: collectionInfo.result?.points_count
-      });
-    } catch (e) {
-      console.warn('Could not retrieve collection info:', e);
-    }
+    // try {
+    //   const collectionInfo = await this.getCollectionInfo();
+    //   console.log('Collection info:', {
+    //     vectorSize: collectionInfo.result?.config?.params?.vectors?.size,
+    //     distance: collectionInfo.result?.config?.params?.vectors?.distance,
+    //     pointsCount: collectionInfo.result?.points_count
+    //   });
+    // } catch (e) {
+    //   console.warn('Could not retrieve collection info:', e);
+    // }
     
     console.log('Adding points to Qdrant:', {
       count: points.length,
@@ -310,8 +310,8 @@ class QdrantCloudService {
       
       try {
         // Validate required fields
-        if (!point.vector || !Array.isArray(point.vector) || point.vector.length !== 1536) {
-          console.warn(`Point at index ${i} has invalid vector: expected 1536 dimensions, got ${point.vector?.length || 'none'}`);
+        if (!point.vector || !Array.isArray(point.vector) || point.vector.length !== 4096) {
+          console.warn(`Point at index ${i} has invalid vector: expected 4096 dimensions, got ${point.vector?.length || 'none'}`);
           continue;
         }
         
@@ -342,7 +342,7 @@ class QdrantCloudService {
   async searchSimilar(
     queryVector: number[], 
     limit: number = 5, 
-    scoreThreshold: number = 0.7,
+    scoreThreshold: number = 0.6,
     productName?: string
   ): Promise<SearchResult[]> {
     console.log("🚀 ~ QdrantCloudService ~ productName:", productName);
@@ -352,21 +352,24 @@ class QdrantCloudService {
       this.operationStats.searches++;
       
       // Validate query vector
-      if (!queryVector || !Array.isArray(queryVector) || queryVector.length !== 1536) {
-        throw new Error('Invalid query vector: expected 1536 dimensions');
+      if (!queryVector || !Array.isArray(queryVector) || queryVector.length !== 4096) {
+        throw new Error('Invalid query vector: expected 4096 dimensions');
       }
       
       // Prepare search parameters
       const searchParams: any = {
         vector: queryVector,
-        limit: Math.min(limit, 100), // Cap at 100 for performance
-        score_threshold: scoreThreshold,
+        with_vector: false,
         with_payload: true,
-        with_vector: false, // Don't return vectors to save bandwidth
+        score_threshold: .5,
+        limit: Math.min(limit, 100), // Cap at 100 for performance
+        // score_threshold: scoreThreshold,
+        // with_payload: true,
+        // with_vector: false, // Don't return vectors to save bandwidth
         search_params: {
-          hnsw_ef: 64,
-          exact: false,
-          indexed_only: true
+          hnsw_ef: 256,
+          // exact: false,
+          // indexed_only: true
         }
       };
       
@@ -636,7 +639,7 @@ export class QdrantService {
       }
       
       // For testing, we'll create a dummy vector (in real use, this would come from embeddings)
-      const dummyVector = new Array(1536).fill(0).map(() => Math.random());
+      const dummyVector = new Array(4096).fill(0).map(() => Math.random());
       
       // Try to search
       const results = await this.searchSimilar(dummyVector, 5);

@@ -79,7 +79,7 @@ export class QdrantService {
           method: "PUT",
           body: JSON.stringify({
             vectors: {
-              size: 1536, // text-embedding-3-small dimension
+              size: 4096, // text-embedding-3-small dimension
               distance: "Cosine",
             },
           }),

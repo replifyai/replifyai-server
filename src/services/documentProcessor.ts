@@ -1,4 +1,5 @@
-import { createEmbedding, extractDocumentMetadata } from "./openai.js";
+import { createEmbedding } from "./embeddingService.js";
+import { extractDocumentMetadata } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import type { Document } from "../../shared/schema.js";
@@ -170,7 +171,7 @@ export class DocumentProcessor {
       console.log("Attempting AI chunking for document:", filename);
       
       const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [
           {
             role: "system",
@@ -241,64 +242,73 @@ Always respond with valid JSON only. No information should be lost during chunki
     const analysis = this.analyzeTextStructure(text);
     const isProductDoc = this.isProductDocument(text);
     const keyInfoPatterns = this.extractKeyInformation(text);
-    
+  
     // Build adaptive instructions based on document analysis
     const adaptiveInstructions = this.buildAdaptiveInstructions(analysis, isProductDoc, keyInfoPatterns);
-    
+  
     return `
-Analyze the following document and create comprehensive, intelligent chunks for a RAG system.
-
-Document: "${filename}"
-Content Length: ${text.length} characters
-Strategy: ${strategy.name}
-Document Type: ${analysis.documentStructure}
-Max Chunk Size: ${strategy.maxChunkSize} characters
-Min Chunk Size: ${strategy.minChunkSize} characters
-
-CRITICAL: You must capture ALL important information from the document. Do not miss any key details like pricing, specifications, measurements, policies, or technical details.
-
-Document Analysis:
-${analysis.likelyOCRIssues ? '- Document may have OCR issues (spaced text detected)' : '- Document appears to have clean text'}
-${keyInfoPatterns.length > 0 ? `- Key information detected:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
-
-Document Content:
-"""
-${text}
-"""
-
-${adaptiveInstructions}
-
-UNIVERSAL REQUIREMENTS:
-1. THOROUGHLY analyze the entire document - do not miss any information
-2. Create 4-10 comprehensive chunks that capture ALL content
-3. Each chunk should be ${strategy.minChunkSize}-${strategy.maxChunkSize} characters
-4. Ensure NO information is lost - every important detail must be in a chunk
-5. Pay special attention to numbers, prices, measurements, specifications
-6. Group related information together logically
-7. Provide meaningful titles and summaries for each chunk
-8. Rate importance (1-10) based on information value
-
-QUALITY CHECK: After creating chunks, verify that:
-- All numerical data is included (prices, measurements, quantities)
-- All key specifications are captured
-- No important details are missing
-- Content is logically grouped by topic/function
-
-Respond with JSON in this exact format:
-{
-  "documentType": "product" | "invoice" | "manual" | "technical" | "general",
-  "documentSummary": "Brief summary of the entire document",
-  "chunks": [
-    {
-      "content": "The actual chunk content (${strategy.minChunkSize}-${strategy.maxChunkSize} chars)",
-      "title": "Descriptive title for this chunk",
-      "summary": "Brief summary of what this chunk contains",
-      "keyTopics": ["topic1", "topic2", "topic3"],
-      "importance": 8,
-      "chunkType": "introduction" | "specification" | "features" | "pricing" | "policies" | "technical" | "general"
-    }
-  ]
-}`;
+  Analyze the entire document and divide it into logically grouped, information-rich chunks suitable for a RAG system.  
+  **Every chunk must maximize recall and precision for semantic search.**  
+  Do not miss, repeat, or fragment important details.
+  
+  Document: "${filename}"  
+  Content Length: ${text.length} characters  
+  Chunking Strategy: ${strategy.name}  
+  Document Structure: ${analysis.documentStructure}  
+  Max Chunk Size: ${strategy.maxChunkSize} characters  
+  Min Chunk Size: ${strategy.minChunkSize} characters  
+  
+  CRITICAL REQUIREMENTS:
+  - Capture EVERY important fact, number, price, specification, measurement, and policy—**no losses**
+  - Group closely-related information into a single chunk when possible (avoid single-line or sparse chunks)
+  - Merge very small, related sections to avoid information being split across multiple, sparse chunks
+  - Add **references/tags** in the metadata if information is closely linked to another chunk (optional: 'relatedChunks' field)
+  - Avoid redundancy between chunks—each detail should appear in only one chunk unless absolutely necessary for context
+  - Assign MEANINGFUL, user-intent focused titles and clear, concise summaries to each chunk
+  - Assign importance (1-10) reflecting the value and retrieval relevance of chunk information
+  
+  ADDITIONAL ENRICHMENTS:
+  - Include a 'keyTopics' array and a 'chunkType' field for each chunk as metadata
+  - If applicable, add a 'lastUpdated' timestamp and any relevant advanced metadata structure (e.g., tags, entities)
+  - Each chunk should have unique and clear key topics for precise filtering
+  - For product docs, explicitly identify and organize chunks for: variants, sizes, colors, pricing, features, use cases, care/policy, specs, and benefits
+  
+  QUALITY ASSURANCE:
+  - Every numerical value, technical measurement, or specification is present and correct
+  - No key information is omitted, repeated unnecessarily, or split across single-line chunks
+  - All content is grouped logically by function or topic, never arbitrarily
+  - No duplicate or overlapping information between chunks (except where context requires)
+  
+  Respond in the following strict JSON format:
+  
+  {
+    "documentType": "product" | "invoice" | "manual" | "technical" | "general",
+    "documentSummary": "Brief but complete summary (max 2 lines) of the entire document",
+    "chunks": [
+      {
+        "content": "Chunk content (${strategy.minChunkSize}-${strategy.maxChunkSize} chars), covering a related set of information in detail",
+        "title": "Clear, specific title for this chunk",
+        "summary": "2-3 sentences summarizing what the chunk includes",
+        "keyTopics": ["primary topic", "secondary topic", ...],
+        "importance": 1-10,
+        "chunkType": "introduction" | "specification" | "features" | "pricing" | "policies" | "use_cases" | "benefits" | "technical" | "general",
+        "lastUpdated": "YYYY-MM-DD", // optional
+        "relatedChunks": [chunkIndex1, chunkIndex2] // optional
+      }
+    ]
+  }
+  
+  Document Analysis:
+  ${analysis.likelyOCRIssues ? '- Possible OCR issues—check for garbled text' : '- Text is clean'}
+  ${keyInfoPatterns.length > 0 ? `- Key patterns found:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
+  
+  Document Content:
+  """
+  ${text}
+  """
+  
+  ${adaptiveInstructions}
+  `;
   }
 
   private buildAdaptiveInstructions(analysis: any, isProductDoc: boolean, keyInfo: string[]): string {

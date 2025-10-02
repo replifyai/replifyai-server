@@ -11,6 +11,7 @@ import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
 import { qaIngestionService } from "./services/qaIngestionService.js";
 import { WebSocketHandler } from './services/websocketHandler.js';
+import { customerService } from './services/customerService.js';
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -272,6 +273,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error) {
       res.status(500).json({ message: (error as Error).message });
+    }
+  });
+
+  // Customer-facing ecommerce chatbot endpoint
+  app.post("/api/customer/query", async (req, res) => {
+    try {
+      const { 
+        query, 
+        category = "", 
+        userId, 
+        sessionId,
+        retrievalCount = 20,
+        similarityThreshold = 0.5 
+      } = req.body;
+      
+      if (!query || typeof query !== 'string' || query.trim().length === 0) {
+        return res.status(400).json({ 
+          message: "Query is required and must be a non-empty string",
+          error: "INVALID_QUERY"
+        });
+      }
+
+      // Validate query length
+      if (query.length > 1000) {
+        return res.status(400).json({ 
+          message: "Query is too long (max 1000 characters)",
+          error: "QUERY_TOO_LONG"
+        });
+      }
+
+      console.log(`🛍️ Customer query received: "${query}" from user: ${userId || 'anonymous'}`);
+
+      const result = await customerService.processCustomerQuery(query, {
+        category,
+        userId,
+        sessionId,
+        retrievalCount,
+        similarityThreshold
+      });
+
+      // Add response metadata
+      const responseWithMetadata = {
+        ...result,
+        metadata: {
+          timestamp: new Date().toISOString(),
+          userId: userId || null,
+          sessionId: sessionId || null,
+          processingTime: Date.now(),
+          apiVersion: "1.0"
+        }
+      };
+
+      res.json(responseWithMetadata);
+    } catch (error) {
+      console.error('Customer query error:', error);
+      res.status(500).json({ 
+        message: "Sorry, I'm having trouble processing your request. Please try again.",
+        error: "PROCESSING_ERROR",
+        details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
+      });
     }
   });
 

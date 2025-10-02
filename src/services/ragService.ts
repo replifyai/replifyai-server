@@ -1,8 +1,7 @@
-import { createEmbedding } from "./openai.js";
+import { createEmbedding } from "./embeddingService.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
-import { openai } from "./openai.js";
 
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
@@ -54,10 +53,10 @@ export class RAGService {
     similarityThreshold?: number;
     productName?: string;
     intent?: string;
+    skipGeneration?: boolean;
   } = {}): Promise<RAGResponse> {
-    console.log("🚀 ~ RAGService ~ queryDocuments ~ query:", query);
-    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query" } = options;
-    console.log("🚀 ~ RAGService ~ productName:", productName);
+    console.log("🚀 ~ RAGService ~ queryDocuments ~ options:", options);
+    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query", skipGeneration = false } = options;
     try {
       // Create embedding for the query
       const queryEmbedding = await createEmbedding(query);
@@ -94,11 +93,6 @@ export class RAGService {
 
       console.log(`🔍 RAG Query: "${query}"`);
       console.log(`📊 Retrieved chunks: ${searchResults.length}`);
-      console.log(`📈 Top 3 chunks by Qdrant similarity score:`, sortedChunks.slice(0, 3).map(chunk => ({
-        filename: chunk.filename,
-        similarityScore: chunk.score?.toFixed(3),
-        preview: chunk.content.substring(0, 100) + '...'
-      })));
 
       // Prepare context from search results with chunk IDs
       const contextChunks = sortedChunks.map((result, index) => {
@@ -116,6 +110,34 @@ export class RAGService {
           originalData: result
         };
       });
+
+      // Skip LLM generation if requested (for customer service)
+      if (skipGeneration) {
+        // Prepare sources information from all chunks, ensuring unique sourceUrls
+        const uniqueSourceUrls = new Set<string>();
+        const sources = contextChunks
+          .map(chunk => ({
+            documentId: chunk.originalData.documentId,
+            filename: chunk.originalData.filename,
+            content: chunk.originalData.content,
+            score: chunk.originalData.score,
+            metadata: chunk.originalData.metadata || [],
+            sourceUrl: chunk.originalData.metadata?.sourceUrl,
+            uploadType: chunk.originalData.metadata?.uploadType,
+          }));
+
+        return {
+          query,
+          response: "", // Empty response since customer service will generate its own
+          sources,
+          contextAnalysis: {
+            isContextMissing: false,
+            suggestedTopics: [],
+            category: 'answered',
+            priority: 'low'
+          },
+        };
+      }
 
       // Generate response using OpenAI
       let responseData;
@@ -192,18 +214,17 @@ export class RAGService {
     // const queryAnalysis = await this.analyzeQueryIntent(query);
 
     const systemPrompt = `
-    You are an AI assistant that must answer questions **only** using the provided context from uploaded documents.
+    You are an AI assistant for the whole company, which help in giving informative answers to the user queries.
     
     QUERY: ${query}
     
     CRITICAL INSTRUCTIONS:
     1. Use only the provided context for answers — never use external knowledge.  
     2. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.  
-    3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."
+    3. If the exact answer is missing from the context, reply: "I don't have enough information to answer this question."
     4. Do not use the word "chunk","document","source","context" in your response.
-    5. You are a helpful assistant, helping a sales agent.
-    6. Whatever response you give, Will be directly used by the sales agent to answer the user's question, so make sure your response answers the question and is detailed.
-    7. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
+    5. You are a helpful assistant, helping the user to get the information they are looking for.
+    6. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
     
     ANSWERING RULES:
 
@@ -512,6 +533,7 @@ Examples:
     content: string;
     originalData: any;
   }>): Promise<{ response: string; usedChunkIds: string[] }> {
+    console.log("🚀 ~ RAGService ~ generateSalesAgentResponse ~ query:", query);
     const systemPrompt = `You are a friendly, consultative sales agent.
 Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
 Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
@@ -523,17 +545,11 @@ ${contextChunks.map(c => c.content).join('\n\n---\n\n')}
 
 IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: query },
-      ],
-      temperature: 0.4,
-      max_tokens: 240,
-    });
-
-    const responseText = response.choices[0]?.message?.content || "";
+    const responseText = await inferenceProvider.chatCompletion(
+      systemPrompt,
+      query,
+      { temperature: 0.4, maxTokens: 240 }
+    );
 
     const usedChunkIds: string[] = [];
     const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
