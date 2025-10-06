@@ -1,4 +1,5 @@
-import { createEmbedding, extractDocumentMetadata } from "./openai.js";
+import { createEmbedding } from "./embeddingService.js";
+import { extractDocumentMetadata } from "./openai.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import type { Document } from "../../shared/schema.js";
@@ -11,11 +12,24 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+export interface ExtractedLink {
+  url: string;
+  text?: string;
+  type: 'link' | 'image' | 'email' | 'phone';
+  position?: { page?: number; x?: number; y?: number };
+}
+
+export interface ExtractedContent {
+  text: string;
+  links: ExtractedLink[];
+}
+
 export interface ProcessedChunk {
   content: string;
   chunkIndex: number;
   metadata?: any;
   qualityScore?: number;
+  links?: ExtractedLink[];
 }
 
 export interface ChunkingStrategy {
@@ -65,12 +79,13 @@ export class DocumentProcessor {
       await storage.updateDocumentStatus(document.id, "processing");
 
       // Extract text with enhanced extraction
-      const rawText = await this.extractText(fileBuffer, document.fileType);
+      const extractedContent = await this.extractText(fileBuffer, document.fileType);
       
       // Clean and normalize the extracted text
-      const text = this.cleanAndNormalizeText(rawText);
+      const text = this.cleanAndNormalizeText(extractedContent.text);
       
-      console.log(`Extracted text length: ${text.length} characters (cleaned from ${rawText.length})`);
+      console.log(`Extracted text length: ${text.length} characters (cleaned from ${extractedContent.text.length})`);
+      console.log(`Extracted ${extractedContent.links.length} links from document`);
       
       // Validate text quality
       // if (!this.validateTextQuality(text)) {
@@ -89,27 +104,35 @@ export class DocumentProcessor {
       console.log("🚀 ~ DocumentProcessor ~ processDocument ~ aiChunkingResult:", JSON.stringify(aiChunkingResult, null, 2));
       
       // Convert AI chunks to ProcessedChunks
-      const processedChunks = aiChunkingResult.chunks.map((aiChunk, index) => ({
-        content: aiChunk.content,
-        chunkIndex: index,
-        qualityScore: Math.min(aiChunk.importance / 10, 1), // Convert importance to quality score
-        metadata: {
-          filename: document.originalName,
-          productName: document.originalName,
-          title: aiChunk.title,
-          summary: aiChunk.summary,
-          keyTopics: aiChunk.keyTopics,
-          importance: aiChunk.importance,
-          chunkType: aiChunk.chunkType,
-          chunkLength: aiChunk.content.length,
-          strategy: strategy.name,
-          docMetadata,
-          documentSummary: aiChunkingResult.documentSummary,
-          documentType: aiChunkingResult.documentType,
-          sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl, // Include source URL if available
-          uploadType: (document.metadata as any)?.uploadType || 'file'
-        }
-      }));
+      const processedChunks = aiChunkingResult.chunks.map((aiChunk, index) => {
+        // Find links that are relevant to this chunk
+        const chunkLinks = this.findRelevantLinks(aiChunk.content, extractedContent.links, text);
+        
+        return {
+          content: aiChunk.content,
+          chunkIndex: index,
+          qualityScore: Math.min(aiChunk.importance / 10, 1), // Convert importance to quality score
+          links: chunkLinks,
+          metadata: {
+            filename: document.originalName,
+            productName: document.originalName,
+            title: aiChunk.title,
+            summary: aiChunk.summary,
+            keyTopics: aiChunk.keyTopics,
+            importance: aiChunk.importance,
+            chunkType: aiChunk.chunkType,
+            chunkLength: aiChunk.content.length,
+            strategy: strategy.name,
+            docMetadata,
+            documentSummary: aiChunkingResult.documentSummary,
+            documentType: aiChunkingResult.documentType,
+            sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl, // Include source URL if available
+            uploadType: (document.metadata as any)?.uploadType || 'file',
+            // Include all document links for reference
+            documentLinks: extractedContent.links
+          }
+        };
+      });
       console.log("🚀 ~ DocumentProcessor ~ processedChunks ~ processedChunks:", JSON.stringify(processedChunks, null, 2));
 
       console.log(`Created ${processedChunks.length} AI-powered chunks`);
@@ -122,13 +145,47 @@ export class DocumentProcessor {
         // Create embedding
         const embedding = await createEmbedding(chunk.content);
         
-        // Store chunk in database
+        // Generate enhanced metadata for robust retrieval
+        const semanticTitle = this.generateSemanticTitle(chunk.content, chunk.metadata);
+        const keywords = this.extractRobustKeywords(chunk.content, chunk.metadata);
+        const documentSection = this.generateDocumentSection(chunk, processedChunks, i);
+        
+        // Enhanced metadata for the chunk
+        const enhancedMetadata = {
+          ...chunk.metadata,
+          // Semantic metadata
+          semanticTitle,
+          keywords,
+          
+          // Document section hierarchy for context stitching
+          documentSection,
+          
+          // Chunk references for navigation
+          chunkReference: `${document.id}_${chunk.chunkIndex}`,
+          previousChunk: i > 0 ? `${document.id}_${i - 1}` : null,
+          nextChunk: i < processedChunks.length - 1 ? `${document.id}_${i + 1}` : null,
+          
+          // Temporal metadata
+          uploadTimestamp: Date.now(),
+          
+          // Search optimization
+          searchableText: this.generateSearchableText(chunk.content, chunk.metadata),
+          keywordDensity: this.calculateKeywordDensity(chunk.content, keywords),
+          
+          // Links and media
+          links: chunk.links || [],
+          linkCount: chunk.links ? chunk.links.length : 0,
+          imageLinks: chunk.links ? chunk.links.filter(link => link.type === 'image') : [],
+          externalLinks: chunk.links ? chunk.links.filter(link => link.type === 'link') : [],
+        };
+        
+        // Store chunk in database with enhanced metadata
         const savedChunk = await storage.createChunk({
           documentId: document.id,
           chunkIndex: chunk.chunkIndex,
           content: chunk.content,
           embedding,
-          metadata: chunk.metadata,
+          metadata: enhancedMetadata,
         });
 
         vectorChunks.push({
@@ -139,8 +196,16 @@ export class DocumentProcessor {
             chunkIndex: chunk.chunkIndex,
             content: chunk.content,
             filename: document.originalName,
-            metadata: chunk.metadata,
+            semanticTitle,
+            keywords,
+            metadata: enhancedMetadata,
             uploadTimestamp: Date.now(),
+            originalChunkId: savedChunk.id,
+            chunkReference: `${document.id}_${chunk.chunkIndex}`,
+            // Include links in the payload for RAG retrieval
+            links: chunk.links || [],
+            imageLinks: chunk.links ? chunk.links.filter(link => link.type === 'image') : [],
+            externalLinks: chunk.links ? chunk.links.filter(link => link.type === 'link') : [],
           },
         });
       }
@@ -170,7 +235,7 @@ export class DocumentProcessor {
       console.log("Attempting AI chunking for document:", filename);
       
       const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [
           {
             role: "system",
@@ -241,64 +306,73 @@ Always respond with valid JSON only. No information should be lost during chunki
     const analysis = this.analyzeTextStructure(text);
     const isProductDoc = this.isProductDocument(text);
     const keyInfoPatterns = this.extractKeyInformation(text);
-    
+  
     // Build adaptive instructions based on document analysis
     const adaptiveInstructions = this.buildAdaptiveInstructions(analysis, isProductDoc, keyInfoPatterns);
-    
+  
     return `
-Analyze the following document and create comprehensive, intelligent chunks for a RAG system.
-
-Document: "${filename}"
-Content Length: ${text.length} characters
-Strategy: ${strategy.name}
-Document Type: ${analysis.documentStructure}
-Max Chunk Size: ${strategy.maxChunkSize} characters
-Min Chunk Size: ${strategy.minChunkSize} characters
-
-CRITICAL: You must capture ALL important information from the document. Do not miss any key details like pricing, specifications, measurements, policies, or technical details.
-
-Document Analysis:
-${analysis.likelyOCRIssues ? '- Document may have OCR issues (spaced text detected)' : '- Document appears to have clean text'}
-${keyInfoPatterns.length > 0 ? `- Key information detected:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
-
-Document Content:
-"""
-${text}
-"""
-
-${adaptiveInstructions}
-
-UNIVERSAL REQUIREMENTS:
-1. THOROUGHLY analyze the entire document - do not miss any information
-2. Create 4-10 comprehensive chunks that capture ALL content
-3. Each chunk should be ${strategy.minChunkSize}-${strategy.maxChunkSize} characters
-4. Ensure NO information is lost - every important detail must be in a chunk
-5. Pay special attention to numbers, prices, measurements, specifications
-6. Group related information together logically
-7. Provide meaningful titles and summaries for each chunk
-8. Rate importance (1-10) based on information value
-
-QUALITY CHECK: After creating chunks, verify that:
-- All numerical data is included (prices, measurements, quantities)
-- All key specifications are captured
-- No important details are missing
-- Content is logically grouped by topic/function
-
-Respond with JSON in this exact format:
-{
-  "documentType": "product" | "invoice" | "manual" | "technical" | "general",
-  "documentSummary": "Brief summary of the entire document",
-  "chunks": [
-    {
-      "content": "The actual chunk content (${strategy.minChunkSize}-${strategy.maxChunkSize} chars)",
-      "title": "Descriptive title for this chunk",
-      "summary": "Brief summary of what this chunk contains",
-      "keyTopics": ["topic1", "topic2", "topic3"],
-      "importance": 8,
-      "chunkType": "introduction" | "specification" | "features" | "pricing" | "policies" | "technical" | "general"
-    }
-  ]
-}`;
+  Analyze the entire document and divide it into logically grouped, information-rich chunks suitable for a RAG system.  
+  **Every chunk must maximize recall and precision for semantic search.**  
+  Do not miss, repeat, or fragment important details.
+  
+  Document: "${filename}"  
+  Content Length: ${text.length} characters  
+  Chunking Strategy: ${strategy.name}  
+  Document Structure: ${analysis.documentStructure}  
+  Max Chunk Size: ${strategy.maxChunkSize} characters  
+  Min Chunk Size: ${strategy.minChunkSize} characters  
+  
+  CRITICAL REQUIREMENTS:
+  - Capture EVERY important fact, number, price, specification, measurement, and policy—**no losses**
+  - Group closely-related information into a single chunk when possible (avoid single-line or sparse chunks)
+  - Merge very small, related sections to avoid information being split across multiple, sparse chunks
+  - Add **references/tags** in the metadata if information is closely linked to another chunk (optional: 'relatedChunks' field)
+  - Avoid redundancy between chunks—each detail should appear in only one chunk unless absolutely necessary for context
+  - Assign MEANINGFUL, user-intent focused titles and clear, concise summaries to each chunk
+  - Assign importance (1-10) reflecting the value and retrieval relevance of chunk information
+  
+  ADDITIONAL ENRICHMENTS:
+  - Include a 'keyTopics' array and a 'chunkType' field for each chunk as metadata
+  - If applicable, add a 'lastUpdated' timestamp and any relevant advanced metadata structure (e.g., tags, entities)
+  - Each chunk should have unique and clear key topics for precise filtering
+  - For product docs, explicitly identify and organize chunks for: variants, sizes, colors, pricing, features, use cases, care/policy, specs, and benefits
+  
+  QUALITY ASSURANCE:
+  - Every numerical value, technical measurement, or specification is present and correct
+  - No key information is omitted, repeated unnecessarily, or split across single-line chunks
+  - All content is grouped logically by function or topic, never arbitrarily
+  - No duplicate or overlapping information between chunks (except where context requires)
+  
+  Respond in the following strict JSON format:
+  
+  {
+    "documentType": "product" | "invoice" | "manual" | "technical" | "general",
+    "documentSummary": "Brief but complete summary (max 2 lines) of the entire document",
+    "chunks": [
+      {
+        "content": "Chunk content (${strategy.minChunkSize}-${strategy.maxChunkSize} chars), covering a related set of information in detail",
+        "title": "Clear, specific title for this chunk",
+        "summary": "2-3 sentences summarizing what the chunk includes",
+        "keyTopics": ["primary topic", "secondary topic", ...],
+        "importance": 1-10,
+        "chunkType": "introduction" | "specification" | "features" | "pricing" | "policies" | "use_cases" | "benefits" | "technical" | "general",
+        "lastUpdated": "YYYY-MM-DD", // optional
+        "relatedChunks": [chunkIndex1, chunkIndex2] // optional
+      }
+    ]
+  }
+  
+  Document Analysis:
+  ${analysis.likelyOCRIssues ? '- Possible OCR issues—check for garbled text' : '- Text is clean'}
+  ${keyInfoPatterns.length > 0 ? `- Key patterns found:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
+  
+  Document Content:
+  """
+  ${text}
+  """
+  
+  ${adaptiveInstructions}
+  `;
   }
 
   private buildAdaptiveInstructions(analysis: any, isProductDoc: boolean, keyInfo: string[]): string {
@@ -1094,14 +1168,20 @@ GENERAL DOCUMENT - Ensure you capture:
   }
 
   // Keep the enhanced text extraction and cleaning methods
-  private async extractText(buffer: Buffer, fileType: string): Promise<string> {
+  private async extractText(buffer: Buffer, fileType: string): Promise<ExtractedContent> {
     switch (fileType.toLowerCase()) {
       case 'txt':
-        return buffer.toString('utf-8');
+        const text = buffer.toString('utf-8');
+        return {
+          text,
+          links: this.extractLinksFromText(text)
+        };
       
       case 'pdf':
         try {
-          return await this.extractPdfTextEnhanced(buffer);
+          const text = await this.extractPdfTextEnhanced(buffer);
+          const links = await this.extractLinksFromPdf(buffer);
+          return { text, links };
         } catch (error) {
           throw new Error(`Failed to extract PDF text: ${(error as Error).message}`);
         }
@@ -1109,7 +1189,11 @@ GENERAL DOCUMENT - Ensure you capture:
       case 'docx':
         try {
           const result = await mammoth.extractRawText({ buffer });
-          return result.value;
+          const links = await this.extractLinksFromDocx(buffer);
+          return {
+            text: result.value,
+            links
+          };
         } catch (error) {
           throw new Error(`Failed to extract DOCX text: ${(error as Error).message}`);
         }
@@ -1317,6 +1401,521 @@ GENERAL DOCUMENT - Ensure you capture:
 
   async deleteDocumentFromVector(documentId: string): Promise<void> {
     await qdrantService.deleteByDocumentId(documentId);
+  }
+
+  /**
+   * Generate a semantic title optimized for search and display
+   */
+  private generateSemanticTitle(content: string, metadata: any): string {
+    // Use existing title from metadata if available and meaningful
+    if (metadata.title && metadata.title !== 'Untitled Section' && metadata.title.length > 10) {
+      return metadata.title;
+    }
+
+    // Extract the most meaningful phrase from content
+    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 10);
+    if (sentences.length > 0) {
+      const firstSentence = sentences[0].trim();
+      // Create a concise title from first sentence
+      if (firstSentence.length <= 80) {
+        return firstSentence;
+      } else {
+        // Truncate intelligently at word boundary
+        const truncated = firstSentence.substring(0, 77);
+        const lastSpace = truncated.lastIndexOf(' ');
+        return (lastSpace > 40 ? truncated.substring(0, lastSpace) : truncated) + '...';
+      }
+    }
+
+    // Fallback to chunk type and product name
+    const productName = metadata.productName || metadata.filename || 'Product';
+    const chunkType = metadata.chunkType || 'Information';
+    return `${productName} - ${chunkType.charAt(0).toUpperCase() + chunkType.slice(1)}`;
+  }
+
+  /**
+   * Extract comprehensive keywords for hybrid search (BM25 + vector)
+   */
+  private extractRobustKeywords(content: string, metadata: any): string[] {
+    const keywords = new Set<string>();
+
+    // 1. Extract from existing keyTopics in metadata
+    if (metadata.keyTopics && Array.isArray(metadata.keyTopics)) {
+      metadata.keyTopics.forEach((topic: string) => keywords.add(topic.toLowerCase()));
+    }
+
+    // 2. Extract product-specific keywords from docMetadata
+    if (metadata.docMetadata?.key_entities) {
+      const entities = metadata.docMetadata.key_entities;
+      
+      // Product name variants
+      if (entities.product_name) {
+        keywords.add(entities.product_name.toLowerCase());
+        // Add individual words from product name
+        entities.product_name.split(/\s+/).forEach((word: string) => {
+          if (word.length > 2) keywords.add(word.toLowerCase());
+        });
+      }
+
+      // Materials
+      if (entities.materials) {
+        Object.values(entities.materials).forEach((material: any) => {
+          if (typeof material === 'string' && material.length > 2) {
+            keywords.add(material.toLowerCase());
+          }
+        });
+      }
+
+      // Dimensions (extract numbers as keywords)
+      if (entities.dimensions) {
+        keywords.add('dimensions');
+        const dimensionsStr = typeof entities.dimensions === 'string' 
+          ? entities.dimensions 
+          : String(entities.dimensions);
+        const numbers = dimensionsStr.match(/\d+/g);
+        if (numbers) {
+          keywords.add(dimensionsStr.toLowerCase());
+        }
+      }
+
+      // Weight
+      if (entities.weight) {
+        keywords.add('weight');
+      }
+
+      // Pricing
+      if (entities.pricing) {
+        keywords.add('price');
+        keywords.add(`₹${entities.pricing}`);
+      }
+    }
+
+    // 3. Extract from categories and topics
+    if (metadata.docMetadata?.categories) {
+      metadata.docMetadata.categories.forEach((cat: string) => keywords.add(cat.toLowerCase()));
+    }
+    if (metadata.docMetadata?.topics) {
+      metadata.docMetadata.topics.forEach((topic: string) => keywords.add(topic.toLowerCase()));
+    }
+
+    // 4. Extract chunk-type specific keywords
+    const chunkType = metadata.chunkType;
+    if (chunkType) {
+      keywords.add(chunkType);
+      
+      // Add related keywords based on chunk type
+      const typeKeywords = this.getChunkTypeKeywords(chunkType);
+      typeKeywords.forEach(kw => keywords.add(kw));
+    }
+
+    // 5. Extract important nouns and phrases from content
+    const contentKeywords = this.extractContentKeywords(content);
+    contentKeywords.forEach(kw => keywords.add(kw));
+
+    // 6. Add synonyms and related terms for common keywords
+    const expandedKeywords = this.expandKeywordsWithSynonyms(Array.from(keywords));
+    expandedKeywords.forEach(kw => keywords.add(kw));
+
+    // Convert to array and limit to top 20 most relevant
+    return Array.from(keywords).slice(0, 20);
+  }
+
+  /**
+   * Get related keywords based on chunk type
+   */
+  private getChunkTypeKeywords(chunkType: string): string[] {
+    const typeKeywordMap: Record<string, string[]> = {
+      'pricing': ['price', 'cost', 'mrp', 'offer', 'discount', 'payment'],
+      'specification': ['specs', 'dimensions', 'weight', 'size', 'technical', 'measurements'],
+      'features': ['benefits', 'features', 'advantages', 'highlights', 'functionality'],
+      'policies': ['warranty', 'return', 'exchange', 'refund', 'guarantee', 'policy'],
+      'use_cases': ['usage', 'application', 'use', 'purpose', 'suitable for'],
+      'benefits': ['advantages', 'benefits', 'features', 'value', 'improvements'],
+      'technical': ['technical', 'specifications', 'details', 'construction', 'design'],
+      'introduction': ['overview', 'summary', 'about', 'introduction', 'description']
+    };
+
+    return typeKeywordMap[chunkType] || [];
+  }
+
+  /**
+   * Extract important keywords from content text
+   */
+  private extractContentKeywords(content: string): string[] {
+    const keywords: string[] = [];
+    
+    // Extract capitalized words (likely important terms)
+    const capitalizedWords = content.match(/\b[A-Z][a-z]{2,}\b/g) || [];
+    capitalizedWords.forEach(word => {
+      if (word.length > 3) keywords.push(word.toLowerCase());
+    });
+
+    // Extract numbers with units (measurements, prices)
+    const measurements = content.match(/\d+(?:\.\d+)?\s*(?:cm|mm|m|kg|g|inch|₹|rs)/gi) || [];
+    measurements.forEach(m => keywords.push(m.toLowerCase()));
+
+    // Extract quoted phrases
+    const quotes = content.match(/"([^"]+)"/g) || [];
+    quotes.forEach(q => {
+      const cleaned = q.replace(/"/g, '');
+      if (cleaned.length > 3 && cleaned.length < 50) {
+        keywords.push(cleaned.toLowerCase());
+      }
+    });
+
+    return keywords;
+  }
+
+  /**
+   * Expand keywords with common synonyms for better search coverage
+   */
+  private expandKeywordsWithSynonyms(keywords: string[]): string[] {
+    const synonymMap: Record<string, string[]> = {
+      'pillow': ['cushion'],
+      'leg': ['limb'],
+      'support': ['aid', 'assistance'],
+      'pain': ['ache', 'discomfort'],
+      'comfort': ['ease', 'relaxation'],
+      'ergonomic': ['comfortable', 'supportive'],
+      'circulation': ['blood flow'],
+      'fatigue': ['tiredness', 'exhaustion'],
+      'relief': ['comfort', 'ease']
+    };
+
+    const expanded: string[] = [];
+    keywords.forEach(keyword => {
+      if (synonymMap[keyword]) {
+        expanded.push(...synonymMap[keyword]);
+      }
+    });
+
+    return expanded;
+  }
+
+  /**
+   * Generate document section hierarchy for context stitching
+   */
+  private generateDocumentSection(chunk: ProcessedChunk, allChunks: ProcessedChunk[], currentIndex: number): { parent: string; current: string; next?: string } {
+    const metadata = chunk.metadata;
+    const chunkType = metadata?.chunkType || 'general';
+
+    // Determine parent section based on document type
+    let parent = 'Product Overview';
+    if (metadata?.documentType === 'manual') {
+      parent = 'User Manual';
+    } else if (metadata?.documentType === 'technical') {
+      parent = 'Technical Documentation';
+    } else if (metadata?.documentType === 'invoice') {
+      parent = 'Invoice Details';
+    }
+
+    // Current section is based on chunk type
+    const current = this.chunkTypeToSectionName(chunkType);
+
+    // Next section preview (if available)
+    let next: string | undefined;
+    if (currentIndex < allChunks.length - 1) {
+      const nextChunk = allChunks[currentIndex + 1];
+      const nextType = nextChunk.metadata?.chunkType || 'general';
+      next = this.chunkTypeToSectionName(nextType);
+    }
+
+    return { parent, current, next };
+  }
+
+  /**
+   * Convert chunk type to human-readable section name
+   */
+  private chunkTypeToSectionName(chunkType: string): string {
+    const sectionMap: Record<string, string> = {
+      'introduction': 'Introduction',
+      'specification': 'Specifications',
+      'features': 'Features',
+      'pricing': 'Pricing',
+      'policies': 'Policies',
+      'use_cases': 'Use Cases',
+      'benefits': 'Benefits',
+      'technical': 'Technical Details',
+      'general': 'General Information'
+    };
+
+    return sectionMap[chunkType] || 'Information';
+  }
+
+  /**
+   * Generate searchable text optimized for keyword search (BM25)
+   */
+  private generateSearchableText(content: string, metadata: any): string {
+    const parts: string[] = [];
+
+    // Add content
+    parts.push(content);
+
+    // Add metadata fields that should be searchable
+    if (metadata.title) parts.push(metadata.title);
+    if (metadata.summary) parts.push(metadata.summary);
+    if (metadata.productName) parts.push(metadata.productName);
+    if (metadata.filename) parts.push(metadata.filename);
+
+    // Add key entities
+    if (metadata.docMetadata?.key_entities) {
+      const entities = metadata.docMetadata.key_entities;
+      if (entities.product_name) parts.push(entities.product_name);
+      if (entities.dimensions) parts.push(entities.dimensions);
+      if (entities.pricing) parts.push(`price ${entities.pricing}`);
+      if (entities.materials) {
+        Object.values(entities.materials).forEach((m: any) => {
+          if (typeof m === 'string') parts.push(m);
+        });
+      }
+    }
+
+    // Add categories and topics
+    if (metadata.docMetadata?.categories) {
+      parts.push(...metadata.docMetadata.categories);
+    }
+    if (metadata.docMetadata?.topics) {
+      parts.push(...metadata.docMetadata.topics);
+    }
+
+    // Join and normalize
+    return parts.join(' ').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Find links that are relevant to a specific chunk
+   */
+  private findRelevantLinks(chunkContent: string, allLinks: ExtractedLink[], fullText: string): ExtractedLink[] {
+    const relevantLinks: ExtractedLink[] = [];
+    
+    // Find the position of this chunk in the full text
+    const chunkStart = fullText.indexOf(chunkContent);
+    if (chunkStart === -1) {
+      // If chunk not found in full text, return links that appear in the chunk content
+      return allLinks.filter(link => 
+        link.position && 
+        chunkContent.includes(link.url.split('/').pop() || '') ||
+        (link.text && chunkContent.includes(link.text))
+      );
+    }
+    
+    const chunkEnd = chunkStart + chunkContent.length;
+    
+    // Find links that are within or near this chunk
+    for (const link of allLinks) {
+      if (link.position && link.position.x !== undefined) {
+        const linkPosition = link.position.x;
+        
+        // Include links that are within the chunk or within 200 characters of it
+        if (linkPosition >= chunkStart - 200 && linkPosition <= chunkEnd + 200) {
+          relevantLinks.push(link);
+        }
+      } else {
+        // For links without position info, check if they appear in the chunk content
+        if (chunkContent.includes(link.url) || (link.text && chunkContent.includes(link.text))) {
+          relevantLinks.push(link);
+        }
+      }
+    }
+    
+    return relevantLinks;
+  }
+
+  /**
+   * Extract links from text content using regex patterns
+   */
+  private extractLinksFromText(text: string): ExtractedLink[] {
+    const links: ExtractedLink[] = [];
+    
+    // URL patterns
+    const urlPattern = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/gi;
+    const imagePattern = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?[^\s<>"{}|\\^`\[\]]*)?)/gi;
+    const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+    const phonePattern = /(\+?[\d\s\-\(\)]{10,})/gi;
+    
+    // Extract URLs
+    let match;
+    while ((match = urlPattern.exec(text)) !== null) {
+      const url = match[1];
+      const isImage = /\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?.*)?$/i.test(url);
+      
+      links.push({
+        url,
+        type: isImage ? 'image' : 'link',
+        position: { x: match.index, y: 0 }
+      });
+    }
+    
+    // Extract images (separate pass to avoid duplicates)
+    while ((match = imagePattern.exec(text)) !== null) {
+      const url = match[1];
+      // Check if not already added
+      if (!links.some(link => link.url === url)) {
+        links.push({
+          url,
+          type: 'image',
+          position: { x: match.index, y: 0 }
+        });
+      }
+    }
+    
+    // Extract emails
+    while ((match = emailPattern.exec(text)) !== null) {
+      links.push({
+        url: `mailto:${match[1]}`,
+        text: match[1],
+        type: 'email',
+        position: { x: match.index, y: 0 }
+      });
+    }
+    
+    // Extract phone numbers
+    while ((match = phonePattern.exec(text)) !== null) {
+      const phone = match[1].replace(/\s+/g, '');
+      if (phone.length >= 10) {
+        links.push({
+          url: `tel:${phone}`,
+          text: match[1],
+          type: 'phone',
+          position: { x: match.index, y: 0 }
+        });
+      }
+    }
+    
+    return links;
+  }
+
+  /**
+   * Extract links from DOCX using mammoth
+   */
+  private async extractLinksFromDocx(buffer: Buffer): Promise<ExtractedLink[]> {
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      const links = this.extractLinksFromText(result.value);
+      
+      // Try to extract more detailed link information if available
+      const detailedResult = await mammoth.convertToHtml({ buffer });
+      if (detailedResult.value) {
+        // Extract links from HTML content
+        const htmlLinks = this.extractLinksFromHtml(detailedResult.value);
+        // Merge with text-based links, avoiding duplicates
+        const mergedLinks = [...links];
+        htmlLinks.forEach(htmlLink => {
+          if (!mergedLinks.some(link => link.url === htmlLink.url)) {
+            mergedLinks.push(htmlLink);
+          }
+        });
+        return mergedLinks;
+      }
+      
+      return links;
+    } catch (error) {
+      console.warn('Failed to extract links from DOCX:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Extract links from HTML content
+   */
+  private extractLinksFromHtml(html: string): ExtractedLink[] {
+    const links: ExtractedLink[] = [];
+    
+    // Extract <a> tags
+    const linkPattern = /<a[^>]+href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
+    let match;
+    while ((match = linkPattern.exec(html)) !== null) {
+      links.push({
+        url: match[1],
+        text: match[2].trim(),
+        type: 'link'
+      });
+    }
+    
+    // Extract <img> tags
+    const imgPattern = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+    while ((match = imgPattern.exec(html)) !== null) {
+      links.push({
+        url: match[1],
+        type: 'image'
+      });
+    }
+    
+    return links;
+  }
+
+  /**
+   * Extract links from PDF using pdf2json
+   */
+  private async extractLinksFromPdf(buffer: Buffer): Promise<ExtractedLink[]> {
+    return new Promise((resolve, reject) => {
+      const pdfParser = new pdf2json();
+      
+      pdfParser.on("pdfParser_dataError", (errData: any) => {
+        console.warn('PDF parsing error for link extraction:', errData.parserError);
+        resolve([]);
+      });
+      
+      pdfParser.on("pdfParser_dataReady", (pdfData: any) => {
+        try {
+          const links: ExtractedLink[] = [];
+          
+          if (pdfData.Pages) {
+            for (let pageIndex = 0; pageIndex < pdfData.Pages.length; pageIndex++) {
+              const page = pdfData.Pages[pageIndex];
+              let pageText = '';
+              
+              if (page.Texts) {
+                for (const textItem of page.Texts) {
+                  if (textItem.R) {
+                    for (const run of textItem.R) {
+                      if (run.T) {
+                        const decodedText = decodeURIComponent(run.T);
+                        pageText += decodedText;
+                      }
+                    }
+                  }
+                }
+              }
+              
+              // Extract links from page text
+              const pageLinks = this.extractLinksFromText(pageText);
+              pageLinks.forEach(link => {
+                if (link.position) {
+                  link.position.page = pageIndex + 1;
+                }
+              });
+              links.push(...pageLinks);
+            }
+          }
+          
+          resolve(links);
+        } catch (error) {
+          console.warn('Error extracting links from PDF:', error);
+          resolve([]);
+        }
+      });
+      
+      pdfParser.parseBuffer(buffer);
+    });
+  }
+
+  /**
+   * Calculate keyword density for ranking
+   */
+  private calculateKeywordDensity(content: string, keywords: string[]): Record<string, number> {
+    const density: Record<string, number> = {};
+    const lowerContent = content.toLowerCase();
+    const totalWords = lowerContent.split(/\s+/).length;
+
+    keywords.forEach(keyword => {
+      const regex = new RegExp(`\\b${keyword.toLowerCase()}\\b`, 'g');
+      const matches = lowerContent.match(regex);
+      const count = matches ? matches.length : 0;
+      density[keyword] = totalWords > 0 ? count / totalWords : 0;
+    });
+
+    return density;
   }
 }
 

@@ -1,9 +1,8 @@
-import { createEmbedding } from "./openai.js";
+import { createEmbedding } from "./embeddingService.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
-import { openai } from "./openai.js";
-
+import { openai } from "./openai.js"
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
   // confidence: number;
@@ -48,19 +47,39 @@ export class RAGService {
     /context.*does not include/i,
     /provided context.*does not/i,
   ];
+  async expandQuery(query: string): Promise<string> {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: "system", content: `You are a product domain query expander.
+Expand the given search query into a concise yet semantically rich version.
+Include synonyms, related concepts, and equivalent phrasing for better retrieval.
+Keep it in one short line, comma-separated.
+Avoid explanations, formatting, or extra commentary.
+Query: "${query}"` },
+        { role: "user", content: query },
+      ],
+      max_completion_tokens: 1000,
+    });
+    const expandedQuery = response.choices[0]?.message?.content || "";
+    return expandedQuery;
+  }
 
   async queryDocuments(query: string, options: {
     retrievalCount?: number;
     similarityThreshold?: number;
     productName?: string;
     intent?: string;
+    skipGeneration?: boolean;
   } = {}): Promise<RAGResponse> {
-    console.log("🚀 ~ RAGService ~ queryDocuments ~ query:", query);
-    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query" } = options;
-    console.log("🚀 ~ RAGService ~ productName:", productName);
+    console.log("🚀 ~ RAGService ~ queryDocuments ~ options:", options);
+    const { retrievalCount = 10, similarityThreshold = 0.5, productName = "", intent = "query", skipGeneration = false } = options;
     try {
+      // Expand the query
+      const expandedQuery = await this.expandQuery(query);
+      console.log("🚀 ~ RAGService ~ queryDocuments ~ expandedQuery:", expandedQuery);
       // Create embedding for the query
-      const queryEmbedding = await createEmbedding(query);
+      const queryEmbedding = await createEmbedding(expandedQuery || query);
 
       // Search for similar chunks
       const searchResults = await qdrantService.searchSimilar(
@@ -94,22 +113,16 @@ export class RAGService {
 
       console.log(`🔍 RAG Query: "${query}"`);
       console.log(`📊 Retrieved chunks: ${searchResults.length}`);
-      console.log(`📈 Top 3 chunks by Qdrant similarity score:`, sortedChunks.slice(0, 3).map(chunk => ({
-        filename: chunk.filename,
-        similarityScore: chunk.score?.toFixed(3),
-        preview: chunk.content.substring(0, 100) + '...'
-      })));
 
       // Prepare context from search results with chunk IDs
       const contextChunks = sortedChunks.map((result, index) => {
-        console.log("🚀 ~ RAGService ~ queryDocuments ~ result:", result);
         let contextContent = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
-        
+
         // Add complete metadata if available
         if (result.metadata) {
           contextContent += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
         }
-        
+
         return {
           id: `chunk_${index}`,
           content: contextContent,
@@ -117,11 +130,39 @@ export class RAGService {
         };
       });
 
+      // Skip LLM generation if requested (for customer service)
+      if (skipGeneration) {
+        // Prepare sources information from all chunks, ensuring unique sourceUrls
+        const uniqueSourceUrls = new Set<string>();
+        const sources = contextChunks
+          .map(chunk => ({
+            documentId: chunk.originalData.documentId,
+            filename: chunk.originalData.filename,
+            content: chunk.originalData.content,
+            score: chunk.originalData.score,
+            metadata: chunk.originalData.metadata || [],
+            sourceUrl: chunk.originalData.metadata?.sourceUrl,
+            uploadType: chunk.originalData.metadata?.uploadType,
+          }));
+
+        return {
+          query,
+          response: "", // Empty response since customer service will generate its own
+          sources,
+          contextAnalysis: {
+            isContextMissing: false,
+            suggestedTopics: [],
+            category: 'answered',
+            priority: 'low'
+          },
+        };
+      }
+
       // Generate response using OpenAI
       let responseData;
-      if(intent === "query"){
+      if (intent === "query") {
         responseData = await this.generateResponse(query, contextChunks);
-      }else{
+      } else {
         responseData = await this.generateSalesAgentResponse(query, contextChunks);
       }
       console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData:", responseData);
@@ -130,17 +171,26 @@ export class RAGService {
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
 
       console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData.usedChunkIds:", JSON.stringify(responseData?.usedChunkIds, null, 2));
-      // Filter sources to only include chunks that were actually used
-      const usedChunks = contextChunks.filter(chunk => 
-        responseData.usedChunkIds.includes(chunk.id)
-      );
+      
+      // If no chunks were explicitly cited, include all retrieved chunks as sources
+      // This ensures we always have sources even if the LLM doesn't follow citation format
+      const chunksToInclude = responseData.usedChunkIds.length > 0 
+        ? contextChunks.filter(chunk => responseData.usedChunkIds.includes(chunk.id))
+        : contextChunks;
 
-      // Prepare sources information from only the used chunks, ensuring unique sourceUrls
+      console.log(`📚 Including ${chunksToInclude.length} chunks as sources (${responseData.usedChunkIds.length} explicitly cited)`);
+
+      // Prepare sources information, ensuring unique sourceUrls
       const uniqueSourceUrls = new Set<string>();
-      const sources = usedChunks
+      const sources = chunksToInclude
         .filter(chunk => {
           const sourceUrl = chunk.originalData.metadata?.sourceUrl;
-          if (!sourceUrl || uniqueSourceUrls.has(sourceUrl)) {
+          // If no sourceUrl, include the chunk (it might be from file upload)
+          if (!sourceUrl) {
+            return true;
+          }
+          // If sourceUrl exists, check for uniqueness
+          if (uniqueSourceUrls.has(sourceUrl)) {
             return false;
           }
           uniqueSourceUrls.add(sourceUrl);
@@ -161,7 +211,7 @@ export class RAGService {
         console.log(`Context missing detected for query: "${query}" - Category: ${contextAnalysis.category}`);
       }
 
-      console.log(`📚 Used ${usedChunks.length} out of ${sortedChunks.length} chunks for response`);
+      console.log(`📚 Used ${chunksToInclude.length} out of ${sortedChunks.length} chunks for response`);
 
       return {
         query,
@@ -187,28 +237,29 @@ export class RAGService {
     response: string;
     usedChunkIds: string[];
   }> {
-    
+
     // Get query analysis for enhanced prompting
     // const queryAnalysis = await this.analyzeQueryIntent(query);
 
     const systemPrompt = `
-    You are an AI assistant that must answer questions **only** using the provided context from uploaded documents.
+    You are an AI assistant for the whole company, which help in giving informative answers to the user queries.
     
     QUERY: ${query}
     
     CRITICAL INSTRUCTIONS:
     1. Use only the provided context for answers — never use external knowledge.  
     2. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.  
-    3. If the exact answer is missing from the context, reply: "I don't have enough information in the uploaded documents."
+    3. If the exact answer is missing from the context, reply: "I don't have enough information to answer this question."
     4. Do not use the word "chunk","document","source","context" in your response.
-    5. You are a helpful assistant, helping a sales agent.
-    6. Whatever response you give, Will be directly used by the sales agent to answer the user's question, so make sure your response answers the question and is detailed.
-    7. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
+    5. You are a helpful assistant, helping the user to get the information they are looking for.
+    6. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
     
     ANSWERING RULES:
 
 Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
-[USED_CHUNK: chunk_id].
+[USED_CHUNK: chunk_id]
+
+IMPORTANT: You MUST cite at least one chunk for your answer. If you use information from multiple chunks, cite each one.
 
 Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
 
@@ -221,7 +272,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     Context from uploaded documents:  
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}
     `;
-    
+
 
     // Use provider-agnostic inference for generating the response
     const responseText = await inferenceProvider.chatCompletion(
@@ -232,13 +283,17 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
-    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+    // More flexible pattern to catch variations in citation format
+    const chunkIdPattern = /\[USED_CHUNK:\s*(\w+)\]/gi;
     let match;
     while ((match = chunkIdPattern.exec(responseText)) !== null) {
-      if (!usedChunkIds.includes(match[1])) {
-        usedChunkIds.push(match[1]);
+      const chunkId = match[1];
+      if (!usedChunkIds.includes(chunkId)) {
+        usedChunkIds.push(chunkId);
       }
     }
+    
+    console.log(`🔍 Extracted chunk IDs from response: ${usedChunkIds.join(', ')}`);
 
     // Clean up the response by removing the chunk ID markers
     const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
@@ -512,6 +567,7 @@ Examples:
     content: string;
     originalData: any;
   }>): Promise<{ response: string; usedChunkIds: string[] }> {
+    console.log("🚀 ~ RAGService ~ generateSalesAgentResponse ~ query:", query);
     const systemPrompt = `You are a friendly, consultative sales agent.
 Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
 Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
@@ -523,17 +579,11 @@ ${contextChunks.map(c => c.content).join('\n\n---\n\n')}
 
 IMPORTANT: When you use information from a chunk, include the chunk ID in your response like this: [USED_CHUNK: chunk_id]`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: query },
-      ],
-      temperature: 0.4,
-      max_tokens: 240,
-    });
-
-    const responseText = response.choices[0]?.message?.content || "";
+    const responseText = await inferenceProvider.chatCompletion(
+      systemPrompt,
+      query,
+      { temperature: 0.4, maxTokens: 240 }
+    );
 
     const usedChunkIds: string[] = [];
     const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;

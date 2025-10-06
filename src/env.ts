@@ -26,10 +26,14 @@ export const env = {
   // LLM Provider selection
   LLM_PROVIDER: process.env.LLM_PROVIDER || 'openai',
 
+  // Embedding Provider selection
+  EMBEDDING_PROVIDER: process.env.EMBEDDING_PROVIDER || 'openai',
+
   // Nebius Studio (OpenAI-compatible)
   NEBIUS_API_KEY: process.env.NEBIUS_API_KEY || '',
   NEBIUS_BASE_URL: process.env.NEBIUS_BASE_URL || '',
   NEBIUS_MODEL: process.env.NEBIUS_MODEL || '',
+  NEBIUS_EMBEDDING_MODEL: process.env.NEBIUS_EMBEDDING_MODEL || 'Qwen/Qwen3-Embedding-8B',
   
   // Qdrant
   QDRANT_URL: process.env.QDRANT_URL || 'https://qdrant.example.com',
