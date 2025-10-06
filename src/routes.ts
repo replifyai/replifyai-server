@@ -265,8 +265,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await ragService.queryDocuments(message, {
-        retrievalCount: retrievalCount || 5,
-        similarityThreshold: similarityThreshold ||  0.75,
+        retrievalCount: retrievalCount || 10,
+        similarityThreshold: similarityThreshold ||  0.5,
         productName:productName
       });
 
@@ -370,76 +370,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Context Missing Query Management Endpoints
-  
-  // Get all unresolved context missing queries
-  // app.get("/api/context-missing", async (req, res) => {
-  //   try {
-  //     const queries = await storage.getUnresolvedContextMissingQueries();
-  //     res.json(queries);
-  //   } catch (error) {
-  //     res.status(500).json({ message: (error as Error).message });
-  //   }
-  // });
 
-  // Get context missing analytics
-  // app.get("/api/context-missing/analytics", async (req, res) => {
-  //   try {
-  //     const analytics = await storage.getContextMissingAnalytics();
-  //     res.json(analytics);
-  //   } catch (error) {
-  //     res.status(500).json({ message: (error as Error).message });
-  //   }
-  // });
 
-  // Resolve a context missing query
-  // app.post("/api/context-missing/:id/resolve", async (req, res) => {
-  //   try {
-  //     const id = parseInt(req.params.id);
-  //     const { resolutionNotes } = req.body;
-      
-  //     await storage.resolveContextMissingQuery(id, resolutionNotes);
-  //     res.json({ message: "Query resolved successfully" });
-  //   } catch (error) {
-  //     res.status(500).json({ message: (error as Error).message });
-  //   }
-  // });
-
-  // Get system stats
-  app.get("/api/stats", async (req, res) => {
-    try {
-      const stats = await ragService.getSystemStats();
-      const qdrantStatus = await ragService.getQdrantStatus();
-      const contextMissingAnalytics = await storage.getContextMissingAnalytics();
-      
-      res.json({
-        ...stats,
-        contextMissingQueries: {
-          total: contextMissingAnalytics.totalQueries,
-          unresolved: contextMissingAnalytics.totalQueries - contextMissingAnalytics.resolvedQueries,
-          byCategory: contextMissingAnalytics.byCategory,
-          byPriority: contextMissingAnalytics.byPriority,
-        },
-        qdrantStatus: qdrantStatus.status === "error" ? "disconnected" : "connected",
-        openaiStatus: process.env.OPENAI_API_KEY ? "connected" : "not configured",
-      });
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
-
-  // Settings endpoints
-  app.get("/api/settings/:key", async (req, res) => {
-    try {
-      const setting = await storage.getSetting(req.params.key);
-      if (!setting) {
-        return res.status(404).json({ message: "Setting not found" });
-      }
-      res.json(setting);
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
 
   app.post("/api/settings", async (req, res) => {
     try {
@@ -496,95 +428,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Batch upload files
-  app.post("/api/documents/batch-upload-files", upload.array("files", 100), async (req, res) => {
-    try {
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ message: "No files uploaded" });
-      }
 
-      const files = req.files as Express.Multer.File[];
-      const { concurrency, retryAttempts } = req.body;
 
-      console.log(`Creating batch upload job for ${files.length} files`);
-
-      // Prepare file items
-      const items = files.map(file => {
-        let fileType = 'unknown';
-        if (file.mimetype === 'application/pdf') fileType = 'pdf';
-        else if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') fileType = 'docx';
-        else if (file.mimetype === 'text/plain') fileType = 'txt';
-
-        return {
-          file: {
-            buffer: file.buffer,
-            originalName: file.originalname,
-            fileType,
-            fileSize: file.size
-          }
-        };
-      });
-
-      // Create batch job
-      const jobId = await batchUploadService.createBatchJob(items, {
-        concurrency: parseInt(concurrency) || 3,
-        retryAttempts: parseInt(retryAttempts) || 2
-      });
-
-      res.json({
-        jobId,
-        message: `Batch upload job created with ${files.length} files`,
-        totalItems: files.length,
-        status: 'pending'
-      });
-
-    } catch (error) {
-      console.error('Batch file upload error:', error);
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
-
-  // Get batch job status
-  app.get("/api/batch-jobs/:jobId", async (req, res) => {
-    try {
-      const { jobId } = req.params;
-      const job = batchUploadService.getJobStatus(jobId);
-      
-      if (!job) {
-        return res.status(404).json({ message: "Batch job not found" });
-      }
-
-      res.json(job);
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
-
-  // Get all batch jobs
-  app.get("/api/batch-jobs", async (req, res) => {
-    try {
-      const jobs = batchUploadService.getAllJobs();
-      res.json(jobs);
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
-
-  // Cancel batch job
-  app.post("/api/batch-jobs/:jobId/cancel", async (req, res) => {
-    try {
-      const { jobId } = req.params;
-      const cancelled = batchUploadService.cancelJob(jobId);
-      
-      if (!cancelled) {
-        return res.status(400).json({ message: "Job cannot be cancelled or not found" });
-      }
-
-      res.json({ message: "Batch job cancelled successfully" });
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message });
-    }
-  });
 
   // Generate a quiz
   app.post("/api/quiz", async (req, res) => {

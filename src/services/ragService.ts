@@ -2,7 +2,7 @@ import { createEmbedding } from "./embeddingService.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
-
+import { openai } from "./openai.js"
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
   // confidence: number;
@@ -47,6 +47,23 @@ export class RAGService {
     /context.*does not include/i,
     /provided context.*does not/i,
   ];
+  async expandQuery(query: string): Promise<string> {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: "system", content: `You are a product domain query expander.
+Expand the given search query into a concise yet semantically rich version.
+Include synonyms, related concepts, and equivalent phrasing for better retrieval.
+Keep it in one short line, comma-separated.
+Avoid explanations, formatting, or extra commentary.
+Query: "${query}"` },
+        { role: "user", content: query },
+      ],
+      max_completion_tokens: 1000,
+    });
+    const expandedQuery = response.choices[0]?.message?.content || "";
+    return expandedQuery;
+  }
 
   async queryDocuments(query: string, options: {
     retrievalCount?: number;
@@ -56,10 +73,13 @@ export class RAGService {
     skipGeneration?: boolean;
   } = {}): Promise<RAGResponse> {
     console.log("🚀 ~ RAGService ~ queryDocuments ~ options:", options);
-    const { retrievalCount = 5, similarityThreshold = 0.75, productName = "",intent = "query", skipGeneration = false } = options;
+    const { retrievalCount = 10, similarityThreshold = 0.5, productName = "", intent = "query", skipGeneration = false } = options;
     try {
+      // Expand the query
+      const expandedQuery = await this.expandQuery(query);
+      console.log("🚀 ~ RAGService ~ queryDocuments ~ expandedQuery:", expandedQuery);
       // Create embedding for the query
-      const queryEmbedding = await createEmbedding(query);
+      const queryEmbedding = await createEmbedding(expandedQuery || query);
 
       // Search for similar chunks
       const searchResults = await qdrantService.searchSimilar(
@@ -96,14 +116,13 @@ export class RAGService {
 
       // Prepare context from search results with chunk IDs
       const contextChunks = sortedChunks.map((result, index) => {
-        console.log("🚀 ~ RAGService ~ queryDocuments ~ result:", result);
         let contextContent = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
-        
+
         // Add complete metadata if available
         if (result.metadata) {
           contextContent += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
         }
-        
+
         return {
           id: `chunk_${index}`,
           content: contextContent,
@@ -141,9 +160,9 @@ export class RAGService {
 
       // Generate response using OpenAI
       let responseData;
-      if(intent === "query"){
+      if (intent === "query") {
         responseData = await this.generateResponse(query, contextChunks);
-      }else{
+      } else {
         responseData = await this.generateSalesAgentResponse(query, contextChunks);
       }
       console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData:", responseData);
@@ -153,7 +172,7 @@ export class RAGService {
 
       console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData.usedChunkIds:", JSON.stringify(responseData?.usedChunkIds, null, 2));
       // Filter sources to only include chunks that were actually used
-      const usedChunks = contextChunks.filter(chunk => 
+      const usedChunks = contextChunks.filter(chunk =>
         responseData.usedChunkIds.includes(chunk.id)
       );
 
@@ -209,7 +228,7 @@ export class RAGService {
     response: string;
     usedChunkIds: string[];
   }> {
-    
+
     // Get query analysis for enhanced prompting
     // const queryAnalysis = await this.analyzeQueryIntent(query);
 
@@ -242,7 +261,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     Context from uploaded documents:  
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}
     `;
-    
+
 
     // Use provider-agnostic inference for generating the response
     const responseText = await inferenceProvider.chatCompletion(

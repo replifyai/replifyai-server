@@ -341,11 +341,10 @@ class QdrantCloudService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 5, 
+    limit: number = 10, 
     scoreThreshold: number = 0.6,
     productName?: string
   ): Promise<SearchResult[]> {
-    console.log("🚀 ~ QdrantCloudService ~ productName:", productName);
     
     try {
       console.log(`Searching for similar vectors (limit: ${limit}, threshold: ${scoreThreshold})`);
@@ -395,7 +394,6 @@ class QdrantCloudService {
         metadata: result.payload.metadata,
       }));
 
-      console.log("🚀 ~ QdrantCloudService ~ search results:", JSON.stringify(formattedResults, null, 2));
       return formattedResults;
     } catch (error) {
       console.error(`Error searching vector store: ${(error as Error).message}`);
@@ -448,16 +446,6 @@ class QdrantCloudService {
     }
   }
 
-  /**
-   * Get system statistics
-   * @returns {Object} System statistics
-   */
-  getStats() {
-    return {
-      ...this.operationStats,
-      timestamp: new Date().toISOString()
-    };
-  }
 
   // Expose client for advanced operations
   get qdrantClient() {
@@ -482,7 +470,7 @@ export class QdrantService {
 
   async searchSimilar(
     queryVector: number[], 
-    limit: number = 5, 
+    limit: number = 10, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {
@@ -607,71 +595,6 @@ export class QdrantService {
     }
     
     return allResults;
-  }
-
-  /**
-   * Test the vector store with a sample query
-   * @param {string} query Sample query
-   * @returns {Promise<Object>} Test results
-   */
-  async testSearch(query = "What is the main topic of the documents?"): Promise<any> {
-    try {
-      console.log(`Testing vector store with query: "${query}"`);
-      
-      // First check if collection exists and has points
-      let pointCount = 0;
-      try {
-        pointCount = await this.cloudService.getPointCount();
-      } catch (error) {
-        return {
-          success: false,
-          message: `Collection check failed: ${(error as Error).message}`,
-          query
-        };
-      }
-      
-      if (pointCount === 0) {
-        return {
-          success: false,
-          message: `Collection is empty, no points to search`,
-          query
-        };
-      }
-      
-      // For testing, we'll create a dummy vector (in real use, this would come from embeddings)
-      const dummyVector = new Array(4096).fill(0).map(() => Math.random());
-      
-      // Try to search
-      const results = await this.searchSimilar(dummyVector, 5);
-      
-      return {
-        success: true,
-        query,
-        results: results.map(r => ({
-          score: r.score,
-          content: r.content.substring(0, 100) + (r.content.length > 100 ? '...' : ''),
-          metadata: r.metadata
-        })),
-        pointCount,
-        collectionName: this.cloudService.getKnowledgeBase(),
-        stats: this.cloudService.getStats()
-      };
-    } catch (error) {
-      console.error(`Vector store test failed: ${(error as Error).message}`);
-      return {
-        success: false,
-        message: (error as Error).message,
-        query
-      };
-    }
-  }
-
-  /**
-   * Get system statistics
-   * @returns {Object} System statistics
-   */
-  getStats() {
-    return this.cloudService.getStats();
   }
 }
 
