@@ -171,17 +171,26 @@ Query: "${query}"` },
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
 
       console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData.usedChunkIds:", JSON.stringify(responseData?.usedChunkIds, null, 2));
-      // Filter sources to only include chunks that were actually used
-      const usedChunks = contextChunks.filter(chunk =>
-        responseData.usedChunkIds.includes(chunk.id)
-      );
+      
+      // If no chunks were explicitly cited, include all retrieved chunks as sources
+      // This ensures we always have sources even if the LLM doesn't follow citation format
+      const chunksToInclude = responseData.usedChunkIds.length > 0 
+        ? contextChunks.filter(chunk => responseData.usedChunkIds.includes(chunk.id))
+        : contextChunks;
 
-      // Prepare sources information from only the used chunks, ensuring unique sourceUrls
+      console.log(`📚 Including ${chunksToInclude.length} chunks as sources (${responseData.usedChunkIds.length} explicitly cited)`);
+
+      // Prepare sources information, ensuring unique sourceUrls
       const uniqueSourceUrls = new Set<string>();
-      const sources = usedChunks
+      const sources = chunksToInclude
         .filter(chunk => {
           const sourceUrl = chunk.originalData.metadata?.sourceUrl;
-          if (!sourceUrl || uniqueSourceUrls.has(sourceUrl)) {
+          // If no sourceUrl, include the chunk (it might be from file upload)
+          if (!sourceUrl) {
+            return true;
+          }
+          // If sourceUrl exists, check for uniqueness
+          if (uniqueSourceUrls.has(sourceUrl)) {
             return false;
           }
           uniqueSourceUrls.add(sourceUrl);
@@ -202,7 +211,7 @@ Query: "${query}"` },
         console.log(`Context missing detected for query: "${query}" - Category: ${contextAnalysis.category}`);
       }
 
-      console.log(`📚 Used ${usedChunks.length} out of ${sortedChunks.length} chunks for response`);
+      console.log(`📚 Used ${chunksToInclude.length} out of ${sortedChunks.length} chunks for response`);
 
       return {
         query,
@@ -248,7 +257,9 @@ Query: "${query}"` },
     ANSWERING RULES:
 
 Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
-[USED_CHUNK: chunk_id].
+[USED_CHUNK: chunk_id]
+
+IMPORTANT: You MUST cite at least one chunk for your answer. If you use information from multiple chunks, cite each one.
 
 Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
 
@@ -272,13 +283,17 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
-    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+    // More flexible pattern to catch variations in citation format
+    const chunkIdPattern = /\[USED_CHUNK:\s*(\w+)\]/gi;
     let match;
     while ((match = chunkIdPattern.exec(responseText)) !== null) {
-      if (!usedChunkIds.includes(match[1])) {
-        usedChunkIds.push(match[1]);
+      const chunkId = match[1];
+      if (!usedChunkIds.includes(chunkId)) {
+        usedChunkIds.push(chunkId);
       }
     }
+    
+    console.log(`🔍 Extracted chunk IDs from response: ${usedChunkIds.join(', ')}`);
 
     // Clean up the response by removing the chunk ID markers
     const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();

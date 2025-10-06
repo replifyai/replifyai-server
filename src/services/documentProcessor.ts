@@ -1469,9 +1469,12 @@ GENERAL DOCUMENT - Ensure you capture:
       // Dimensions (extract numbers as keywords)
       if (entities.dimensions) {
         keywords.add('dimensions');
-        const numbers = entities.dimensions.match(/\d+/g);
+        const dimensionsStr = typeof entities.dimensions === 'string' 
+          ? entities.dimensions 
+          : String(entities.dimensions);
+        const numbers = dimensionsStr.match(/\d+/g);
         if (numbers) {
-          keywords.add(entities.dimensions.toLowerCase());
+          keywords.add(dimensionsStr.toLowerCase());
         }
       }
 
