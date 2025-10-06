@@ -284,7 +284,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
     // More flexible pattern to catch variations in citation format
-    const chunkIdPattern = /\[USED_CHUNK:\s*(\w+)\]/gi;
+    const chunkIdPattern = /\[(?:USED_CHUNK|CHUNK_ID):\s*(\w+)\]/gi;
     let match;
     while ((match = chunkIdPattern.exec(responseText)) !== null) {
       const chunkId = match[1];
@@ -296,7 +296,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     console.log(`🔍 Extracted chunk IDs from response: ${usedChunkIds.join(', ')}`);
 
     // Clean up the response by removing the chunk ID markers
-    const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
+    const cleanResponse = responseText.replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*\w+\]/g, '').trim();
 
     return {
       response: cleanResponse,
@@ -586,13 +586,13 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
     );
 
     const usedChunkIds: string[] = [];
-    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
+    const chunkIdPattern = /\[(?:USED_CHUNK|CHUNK_ID):\s*(\w+)\]/gi;
     let match;
     while ((match = chunkIdPattern.exec(responseText)) !== null) {
       if (!usedChunkIds.includes(match[1])) usedChunkIds.push(match[1]);
     }
 
-    const cleanResponse = responseText.replace(/\[USED_CHUNK: \w+\]/g, '').trim();
+    const cleanResponse = responseText.replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*\w+\]/g, '').trim();
     return { response: cleanResponse, usedChunkIds };
   }
 }
