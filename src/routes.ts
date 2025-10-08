@@ -12,16 +12,22 @@ import { generateQuiz, evaluateQuiz } from './quiz/index.js';
 import { qaIngestionService } from "./services/qaIngestionService.js";
 import { WebSocketHandler } from './services/websocketHandler.js';
 import { customerService } from './services/customerService.js';
+import axios from 'axios';
+
+// Extend global type for Slack event deduplication
+declare global {
+  var processedEvents: Set<string> | undefined;
+}
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
+    const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'text/markdown'];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Unsupported file type. Only PDF, DOCX, and TXT files are allowed.'));
+      cb(new Error('Unsupported file type. Only PDF, DOCX, TXT, and Markdown files are allowed.'));
     }
   }
 });
@@ -68,15 +74,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isGoogleDrive = true;
         console.log(`Converted Google Drive URL: ${url} -> ${downloadUrl}`);
       } else {
-        // Check if URL ends with .pdf or has PDF content type for non-Google Drive URLs
-        if (!url.toLowerCase().includes('.pdf') && !url.toLowerCase().includes('pdf')) {
-          return res.status(400).json({ message: "URL must point to a PDF file" });
+        // Check if URL ends with .pdf, .md or has PDF/markdown content type for non-Google Drive URLs
+        const urlLower = url.toLowerCase();
+        const isPdf = urlLower.includes('.pdf') || urlLower.includes('pdf');
+        const isMarkdown = urlLower.includes('.md') || urlLower.includes('.markdown');
+        
+        if (!isPdf && !isMarkdown) {
+          return res.status(400).json({ message: "URL must point to a PDF or Markdown (.md) file" });
         }
       }
 
-      console.log(`Downloading PDF from URL: ${downloadUrl}`);
+      console.log(`Downloading file from URL: ${downloadUrl}`);
 
-      // Download the PDF from URL
+      // Download the file from URL
       const response = await fetch(downloadUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -89,7 +99,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "Google Drive file is not publicly accessible. Please ensure the file is shared with 'Anyone with the link' permission." 
           });
         }
-        return res.status(400).json({ message: `Failed to download PDF: ${response.statusText}` });
+        return res.status(400).json({ message: `Failed to download file: ${response.statusText}` });
       }
 
       const contentType = response.headers.get('content-type');
@@ -102,41 +112,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Validate content type for non-Google Drive URLs
-      if (!isGoogleDrive && contentType && !contentType.includes('pdf')) {
-        return res.status(400).json({ message: "URL does not point to a PDF file" });
+      if (!isGoogleDrive && contentType) {
+        const isPdfContent = contentType.includes('pdf');
+        const isMarkdownContent = contentType.includes('text/markdown') || contentType.includes('text/plain');
+        
+        if (!isPdfContent && !isMarkdownContent) {
+          return res.status(400).json({ message: "URL does not point to a PDF or Markdown file" });
+        }
       }
 
       const buffer = Buffer.from(await response.arrayBuffer());
       const fileSize = buffer.length;
 
       if (fileSize > 10 * 1024 * 1024) {
-        return res.status(400).json({ message: "PDF file is too large (max 10MB)" });
+        return res.status(400).json({ message: "File is too large (max 10MB)" });
       }
 
-      // Validate that we actually got a PDF by checking the file header
-      if (!isPdfBuffer(buffer)) {
-        return res.status(400).json({ message: "Downloaded file is not a valid PDF" });
+      // Determine file type and validate accordingly
+      const urlLower = url.toLowerCase();
+      const isPdfUrl = urlLower.includes('.pdf') || urlLower.includes('pdf');
+      const isMarkdownUrl = urlLower.includes('.md') || urlLower.includes('.markdown');
+      
+      let fileType = 'pdf'; // default for Google Drive
+      let isValidFile = false;
+      
+      if (isPdfUrl || (!isMarkdownUrl && !isPdfUrl)) {
+        // Check if it's a PDF
+        if (isPdfBuffer(buffer)) {
+          fileType = 'pdf';
+          isValidFile = true;
+        }
+      }
+      
+      if (isMarkdownUrl || (!isPdfUrl && !isMarkdownUrl)) {
+        // Check if it's a markdown file (text content)
+        const textContent = buffer.toString('utf-8');
+        if (textContent.length > 0 && !isPdfBuffer(buffer)) {
+          fileType = 'md';
+          isValidFile = true;
+        }
+      }
+      
+      if (!isValidFile) {
+        return res.status(400).json({ message: "Downloaded file is not a valid PDF or Markdown file" });
       }
 
       // Extract filename from URL or use provided name
       let originalName = name;
       if (!originalName) {
         if (isGoogleDrive) {
-          originalName = 'google-drive-document.pdf';
+          originalName = fileType === 'md' ? 'google-drive-document.md' : 'google-drive-document.pdf';
         } else {
           const urlPath = validUrl.pathname;
-          const urlFilename = urlPath.split('/').pop() || 'document.pdf';
+          const urlFilename = urlPath.split('/').pop() || `document.${fileType}`;
           originalName = urlFilename;
         }
       }
 
-      console.log(`Downloaded PDF: ${originalName}, Size: ${fileSize} bytes`);
+      console.log(`Downloaded ${fileType.toUpperCase()}: ${originalName}, Size: ${fileSize} bytes`);
 
       // Create document record with URL reference
       const document = await storage.createDocument({
         filename: `${Date.now()}_${originalName}`,
         originalName: originalName,
-        fileType: 'pdf',
+        fileType: fileType,
         fileSize: fileSize,
         status: "uploading",
         metadata: { 
@@ -144,7 +183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           downloadUrl: downloadUrl, // Store the actual download URL used
           uploadType: 'url',
           isGoogleDrive: isGoogleDrive,
-          contentType: contentType || 'application/pdf'
+          contentType: contentType || (fileType === 'pdf' ? 'application/pdf' : 'text/markdown')
         },
       });
 
@@ -170,7 +209,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
     } catch (error) {
-      console.error('PDF URL upload error:', error);
+      console.error('File URL upload error:', error);
       res.status(500).json({ message: (error as Error).message });
     }
   });
@@ -189,6 +228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (mimetype === 'application/pdf') fileType = 'pdf';
       else if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') fileType = 'docx';
       else if (mimetype === 'text/plain') fileType = 'txt';
+      else if (mimetype === 'text/markdown') fileType = 'md';
 
       // Create document record
       const document = await storage.createDocument({
@@ -258,7 +298,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Chat endpoint
   app.post("/api/chat", async (req, res) => {
     try {
-      const { message, retrievalCount, similarityThreshold,productName="" } = req.body;
+      const { 
+        message, 
+        retrievalCount, 
+        similarityThreshold,
+        productName = "",
+        companyContext 
+      } = req.body;
       
       if (!message) {
         return res.status(400).json({ message: "Message is required" });
@@ -267,7 +313,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await ragService.queryDocuments(message, {
         retrievalCount: retrievalCount || 10,
         similarityThreshold: similarityThreshold ||  0.5,
-        productName:productName
+        productName: productName,
+        companyContext: companyContext // Optional: { companyName, companyDescription, productCategories }
       });
 
       res.json(result);
@@ -451,38 +498,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Sample test POST endpoint
-  app.post("/api/test", async (req, res) => {
-    try {
-      // Log the received payload
-      console.log("=== Test POST Endpoint Called ===");
-      console.log("Headers:", JSON.stringify(req.headers, null, 2));
-      console.log("Body:", JSON.stringify(req.body, null, 2));
-      console.log("Query params:", JSON.stringify(req.query, null, 2));
-      console.log("Timestamp:", new Date().toISOString());
-      console.log("=================================");
+ // Slack bot endpoint
+app.post("/api/slack/events", async (req, res) => {
+  try {
+    const { type, challenge, event, event_id } = req.body;
+    console.log("🚀 ~ registerRoutes ~ req.body:", req.body);
+    const slackRetry = req.headers["x-slack-retry-num"];
 
-      // Return the received payload with additional metadata
-      const response = {
-        message: "Test endpoint successfully received payload",
-        receivedAt: new Date().toISOString(),
-        payload: req.body,
-        headers: req.headers,
-        query: req.query,
-        method: req.method,
-        url: req.url,
-        ip: req.ip || req.connection.remoteAddress
-      };
-
-      res.json(response);
-    } catch (error) {
-      console.error("Test endpoint error:", error);
-      res.status(500).json({ 
-        message: "Test endpoint error", 
-        error: (error as Error).message 
-      });
+    // 1️⃣ Slack URL verification
+    if (type === "url_verification") {
+      console.log("Slack URL verification challenge received");
+      return res.send({ challenge });
     }
-  });
+
+    // 2️⃣ Handle Slack retries (prevents duplicate calls)
+    if (slackRetry) {
+      console.log(`🔁 Slack retry detected for event_id=${event_id}, ignoring.`);
+      return res.sendStatus(200);
+    }
+
+    // 3️⃣ Deduplication guard (prevents multiple processing of same event)
+    if (!global.processedEvents) global.processedEvents = new Set();
+    if (global.processedEvents.has(event_id)) {
+      console.log(`⚠️ Duplicate event ignored: ${event_id}`);
+      return res.sendStatus(200);
+    }
+    global.processedEvents.add(event_id);
+    setTimeout(() => global.processedEvents?.delete(event_id), 60000); // auto cleanup after 1 min
+
+    // 4️⃣ Process only real user messages
+    if (event && event.type === "message" && !event.bot_id) {
+      const userMessage = event.text;
+      const channel = event.channel;
+      const userId = event.user;
+
+      console.log(`💬 Slack message from user ${userId}: "${userMessage}"`);
+
+      try {
+        // Call your existing chat API
+        const chatResponse = await ragService.queryDocuments(userMessage, {
+          retrievalCount: 10,
+          similarityThreshold: 0.5,
+          productName: "", // Optional contextual param
+        });
+
+        const answer =
+          chatResponse.response ||
+          "Sorry, I couldn't find an answer to your question.";
+
+        // Send response back to Slack
+        const slackResponse = await axios.post(
+          "https://slack.com/api/chat.postMessage",
+          {
+            channel,
+            text: answer,
+            thread_ts: event.ts, // reply in thread
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        if (!slackResponse.data.ok) {
+          console.error("Slack API error:", slackResponse.data.error);
+        } else {
+          console.log("✅ Sent response to Slack");
+        }
+      } catch (error) {
+        console.error("Error processing Slack message:", error);
+
+        // Send error message back to Slack
+        try {
+          await axios.post(
+            "https://slack.com/api/chat.postMessage",
+            {
+              channel,
+              text: "Sorry, I'm having trouble processing your request. Please try again.",
+              thread_ts: event.ts,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+        } catch (slackError) {
+          console.error("Failed to send error message to Slack:", slackError);
+        }
+      }
+    }
+
+    // 5️⃣ Always send 200 quickly to stop Slack retries
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Slack webhook error:", error);
+    res.status(500).json({ message: (error as Error).message });
+  }
+});
+
+
 
   const httpServer = createServer(app);
   // Initialize WebSocket handler for realtime transcription

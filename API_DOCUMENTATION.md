@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Intelligent Document Analyzer API provides endpoints for document processing, batch uploads, RAG-powered chat, and system management. The API supports PDF, DOCX, and TXT file processing with AI-powered chunking and vector storage.
+The Intelligent Document Analyzer API provides endpoints for document processing, batch uploads, RAG-powered chat, and system management. The API supports PDF, DOCX, TXT, and Markdown (.md) file processing with AI-powered chunking and vector storage.
 
 ## Base URL
 
@@ -58,7 +58,7 @@ Currently, no authentication is required for API access.
 
 **Request:**
 - Content-Type: `multipart/form-data`
-- Body: `file` (required) - Document file (PDF, DOCX, TXT)
+- Body: `file` (required) - Document file (PDF, DOCX, TXT, Markdown)
 - Max file size: 10MB
 
 **Response:**
@@ -103,6 +103,7 @@ Currently, no authentication is required for API access.
 
 **Supported URLs:**
 - Direct PDF links
+- Direct Markdown (.md) links
 - Google Drive share links (`https://drive.google.com/file/d/FILE_ID/view`)
 
 **Response:** Same as file upload with additional metadata:
@@ -173,7 +174,7 @@ Currently, no authentication is required for API access.
 
 **Constraints:**
 - Maximum 100 URLs per batch
-- Supported: PDF URLs and Google Drive links
+- Supported: PDF URLs, Markdown (.md) URLs, and Google Drive links
 - Concurrency range: 1-10
 - Retry attempts range: 0-5
 
@@ -349,15 +350,33 @@ Currently, no authentication is required for API access.
 
 **Endpoint:** `POST /api/chat`
 
-**Description:** Send a message to the RAG-powered chat system.
+**Description:** Send a message to the RAG-powered chat system with intelligent query classification. The system automatically detects greetings and casual messages, providing friendly contextual responses without unnecessary document retrieval.
 
 **Request:**
 ```json
 {
   "message": "What are the key features of the product?",
   "retrievalCount": 10,        // optional, default: 10
-  "similarityThreshold": 0.75  // optional, default: 0.75
+  "similarityThreshold": 0.75, // optional, default: 0.75
+  "productName": "",           // optional, filter by product name
+  "companyContext": {          // optional, customize greeting responses
+    "companyName": "Acme Corp",
+    "companyDescription": "We provide innovative AI solutions for businesses",
+    "productCategories": "AI chatbots, document analysis, RAG systems"
+  }
 }
+```
+
+**Smart Query Classification:**
+- **Greetings** (e.g., "hi", "hello"): Returns friendly welcome message with company context
+- **Casual Chat** (e.g., "how are you", "thank you"): Returns appropriate conversational response
+- **Informational Queries**: Performs RAG retrieval and generates contextual answers
+
+**Environment Variables for Default Company Context:**
+```env
+COMPANY_NAME=Your Company Name
+COMPANY_DESCRIPTION=Brief description of your company
+PRODUCT_CATEGORIES=category1, category2, category3
 ```
 
 **Response:**

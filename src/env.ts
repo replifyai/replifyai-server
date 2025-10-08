@@ -54,6 +54,14 @@ export const env = {
   
   // Replit
   REPL_ID: process.env.REPL_ID || undefined,
+  
+  // Slack
+  SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN || '',
+  
+  // Company Context
+  COMPANY_NAME: process.env.COMPANY_NAME || 'our company',
+  COMPANY_DESCRIPTION: process.env.COMPANY_DESCRIPTION || 'We help businesses with intelligent document analysis and AI-powered solutions.',
+  PRODUCT_CATEGORIES: process.env.PRODUCT_CATEGORIES || 'document analysis, RAG systems, AI chatbots',
 } as const;
 
 // Validation function for required environment variables

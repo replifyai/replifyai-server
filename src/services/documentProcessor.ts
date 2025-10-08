@@ -1177,6 +1177,14 @@ GENERAL DOCUMENT - Ensure you capture:
           links: this.extractLinksFromText(text)
         };
       
+      case 'md':
+      case 'markdown':
+        const markdownText = buffer.toString('utf-8');
+        return {
+          text: markdownText,
+          links: this.extractLinksFromText(markdownText)
+        };
+      
       case 'pdf':
         try {
           const text = await this.extractPdfTextEnhanced(buffer);

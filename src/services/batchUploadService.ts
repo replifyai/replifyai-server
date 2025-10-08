@@ -263,18 +263,31 @@ export class BatchUploadService extends EventEmitter {
     // Download and validate the file (similar to the route logic)
     const { buffer, originalName, contentType } = await this.downloadFile(item.url);
     
+    // Determine file type from the downloaded file
+    const urlLower = item.url.toLowerCase();
+    const isPdfUrl = urlLower.includes('.pdf') || urlLower.includes('pdf');
+    const isMarkdownUrl = urlLower.includes('.md') || urlLower.includes('.markdown');
+    
+    let fileType = 'pdf'; // default
+    if (isMarkdownUrl || (!isPdfUrl && !isMarkdownUrl)) {
+      const textContent = buffer.toString('utf-8');
+      if (textContent.length > 0 && !this.isPdfBuffer(buffer)) {
+        fileType = 'md';
+      }
+    }
+    
     // Create document record
     const document = await storage.createDocument({
       filename: `${Date.now()}_${originalName}`,
       originalName: originalName,
-      fileType: 'pdf',
+      fileType: fileType,
       fileSize: buffer.length,
       status: "uploading",
       metadata: { 
         sourceUrl: item.url,
         uploadType: 'url',
         batchUpload: true,
-        contentType: contentType || 'application/pdf'
+        contentType: contentType || (fileType === 'pdf' ? 'application/pdf' : 'text/markdown')
       },
     });
 
@@ -347,17 +360,41 @@ export class BatchUploadService extends EventEmitter {
     const contentType = response.headers.get('content-type');
     const buffer = Buffer.from(await response.arrayBuffer());
     
-    // Validate PDF
-    if (!this.isPdfBuffer(buffer)) {
-      throw new Error('Downloaded file is not a valid PDF');
+    // Determine file type and validate accordingly
+    const urlLower = url.toLowerCase();
+    const isPdfUrl = urlLower.includes('.pdf') || urlLower.includes('pdf');
+    const isMarkdownUrl = urlLower.includes('.md') || urlLower.includes('.markdown');
+    
+    let fileType = 'pdf'; // default for Google Drive
+    let isValidFile = false;
+    
+    if (isPdfUrl || (!isMarkdownUrl && !isPdfUrl)) {
+      // Check if it's a PDF
+      if (this.isPdfBuffer(buffer)) {
+        fileType = 'pdf';
+        isValidFile = true;
+      }
+    }
+    
+    if (isMarkdownUrl || (!isPdfUrl && !isMarkdownUrl)) {
+      // Check if it's a markdown file (text content)
+      const textContent = buffer.toString('utf-8');
+      if (textContent.length > 0 && !this.isPdfBuffer(buffer)) {
+        fileType = 'md';
+        isValidFile = true;
+      }
+    }
+    
+    if (!isValidFile) {
+      throw new Error('Downloaded file is not a valid PDF or Markdown file');
     }
 
-    let originalName = 'document.pdf';
+    let originalName = `document.${fileType}`;
     if (isGoogleDrive) {
-      originalName = 'google-drive-document.pdf';
+      originalName = fileType === 'md' ? 'google-drive-document.md' : 'google-drive-document.pdf';
     } else {
       const urlPath = new URL(url).pathname;
-      originalName = urlPath.split('/').pop() || 'document.pdf';
+      originalName = urlPath.split('/').pop() || `document.${fileType}`;
     }
 
     return { buffer, originalName, contentType: contentType || undefined };

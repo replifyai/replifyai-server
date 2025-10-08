@@ -2,7 +2,8 @@ import { createEmbedding } from "./embeddingService.js";
 import { qdrantService } from "./qdrantHybrid.js";
 import { storage } from "../storage.js";
 import { inferenceProvider } from "./inference.js";
-import { openai } from "./openai.js"
+import { openai } from "./openai.js";
+import { env } from "../env.js";
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
   // confidence: number;
@@ -47,22 +48,85 @@ export class RAGService {
     /context.*does not include/i,
     /provided context.*does not/i,
   ];
-  async expandQuery(query: string): Promise<string> {
+  /**
+   * Classify and expand query - determines if RAG is needed
+   */
+  async expandQuery(query: string, companyContext?: {
+    companyName?: string;
+    companyDescription?: string;
+    productCategories?: string;
+  }): Promise<{
+    expandedQuery: string;
+    needsRAG: boolean;
+    queryType: 'greeting' | 'casual' | 'informational' | 'unknown';
+    directResponse?: string;
+  }> {
+    // Use provided context or fallback to environment variables
+    const contextInfo = {
+      companyName: companyContext?.companyName || env.COMPANY_NAME,
+      companyDescription: companyContext?.companyDescription || env.COMPANY_DESCRIPTION,
+      productCategories: companyContext?.productCategories || env.PRODUCT_CATEGORIES
+    };
+
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
-        { role: "system", content: `You are a product domain query expander.
-Expand the given search query into a concise yet semantically rich version.
-Include synonyms, related concepts, and equivalent phrasing for better retrieval.
-Keep it in one short line, comma-separated.
-Avoid explanations, formatting, or extra commentary.
-Query: "${query}"` },
+        { role: "system", content: `You are a query analyzer and expander for ${contextInfo.companyName}.
+
+Company Context:
+- Company: ${contextInfo.companyName}
+- About: ${contextInfo.companyDescription}
+- Products/Services: ${contextInfo.productCategories}
+
+Analyze the user query and determine:
+1. Query type: greeting, casual, or informational
+2. Whether RAG (document retrieval) is needed
+3. If no RAG needed, provide a direct friendly and contextual response that mentions the company/product naturally
+4. If RAG needed, expand the query with domain-specific terminology based on company context
+
+Return a JSON object:
+{
+  "queryType": "greeting|casual|informational",
+  "needsRAG": true|false,
+  "directResponse": "optional friendly response if no RAG needed",
+  "expandedQuery": "expanded query for RAG search (only if needsRAG is true)"
+}
+
+Guidelines for direct responses (greetings/casual):
+- For greetings: Be warm, mention the company name naturally, and offer help with products/services
+- For casual chat: Be friendly and contextual, subtly reference what you can help with
+- Keep responses concise (1-2 sentences max)
+- Always end with an invitation to ask about products/services
+
+Guidelines for query expansion (informational queries):
+- Include synonyms and related concepts from the original query
+- Add domain-specific terms relevant to ${contextInfo.productCategories}
+- Include variations that match the company's product/service offerings
+- Keep expansion focused and relevant (avoid generic terms)
+- Make it semantically rich for better vector search retrieval
+
+Examples:
+- "hi" → {"queryType": "greeting", "needsRAG": false, "directResponse": "Hello! Welcome to ${contextInfo.companyName}. I'm here to help you with any questions about our ${contextInfo.productCategories.split(',')[0]}. What would you like to know?"}
+- "hello" → {"queryType": "greeting", "needsRAG": false, "directResponse": "Hi there! I'm your ${contextInfo.companyName} assistant. Feel free to ask me anything about our products and services!"}
+- "how are you" → {"queryType": "casual", "needsRAG": false, "directResponse": "I'm doing great, thanks for asking! Ready to help you explore our solutions. What brings you here today?"}
+- "thank you" → {"queryType": "casual", "needsRAG": false, "directResponse": "You're very welcome! Let me know if you need anything else about our products or services."}
+- "what are the product features?" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "product features specifications capabilities functionalities benefits key attributes ${contextInfo.productCategories} product details"}
+- If company sells "orthopedic insoles" and query is "best for running" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "running insoles athletic orthopedic support sports insoles arch support for runners plantar support performance footwear active lifestyle"}` },
         { role: "user", content: query },
       ],
-      max_completion_tokens: 1000,
+      max_completion_tokens: 500,
+      response_format: { type: "json_object" }
     });
-    const expandedQuery = response.choices[0]?.message?.content || "";
-    return expandedQuery;
+    
+    const content = response.choices[0]?.message?.content || "{}";
+    const analysis = JSON.parse(content);
+    
+    return {
+      expandedQuery: analysis.expandedQuery || query,
+      needsRAG: analysis.needsRAG !== false,
+      queryType: analysis.queryType || 'unknown',
+      directResponse: analysis.directResponse
+    };
   }
 
   async queryDocuments(query: string, options: {
@@ -71,15 +135,36 @@ Query: "${query}"` },
     productName?: string;
     intent?: string;
     skipGeneration?: boolean;
+    companyContext?: {
+      companyName?: string;
+      companyDescription?: string;
+      productCategories?: string;
+    };
   } = {}): Promise<RAGResponse> {
     console.log("🚀 ~ RAGService ~ queryDocuments ~ options:", options);
-    const { retrievalCount = 10, similarityThreshold = 0.5, productName = "", intent = "query", skipGeneration = false } = options;
+    const { retrievalCount = 10, similarityThreshold = 0.5, productName = "", intent = "query", skipGeneration = false, companyContext } = options;
     try {
-      // Expand the query
-      const expandedQuery = await this.expandQuery(query);
-      console.log("🚀 ~ RAGService ~ queryDocuments ~ expandedQuery:", expandedQuery);
+      // Analyze and expand the query with company context
+      const queryAnalysis = await this.expandQuery(query, companyContext);
+      console.log("🚀 ~ RAGService ~ queryDocuments ~ queryAnalysis:", queryAnalysis);
+      
+      // If RAG is not needed (greeting/casual), return direct response
+      if (!queryAnalysis.needsRAG && queryAnalysis.directResponse) {
+        return {
+          query,
+          response: queryAnalysis.directResponse,
+          sources: [],
+          contextAnalysis: {
+            isContextMissing: false,
+            suggestedTopics: [],
+            category: queryAnalysis.queryType,
+            priority: 'low'
+          },
+        };
+      }
+      
       // Create embedding for the query
-      const queryEmbedding = await createEmbedding(expandedQuery || query);
+      const queryEmbedding = await createEmbedding(queryAnalysis.expandedQuery || query);
 
       // Search for similar chunks
       const searchResults = await qdrantService.searchSimilar(
@@ -283,20 +368,37 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
 
     // Extract used chunk IDs from the response
     const usedChunkIds: string[] = [];
-    // More flexible pattern to catch variations in citation format
-    const chunkIdPattern = /\[(?:USED_CHUNK|CHUNK_ID):\s*(\w+)\]/gi;
-    let match;
-    while ((match = chunkIdPattern.exec(responseText)) !== null) {
-      const chunkId = match[1];
-      if (!usedChunkIds.includes(chunkId)) {
-        usedChunkIds.push(chunkId);
+    // More flexible pattern to catch variations in citation format, including comma-separated lists
+    const chunkIdPatterns = [
+      /\[USED_CHUNK:\s*([^\]]+)\]/gi,
+      /\[CHUNK_ID:\s*([^\]]+)\]/gi,
+      /\[(?:USED_CHUNK|CHUNK_ID):\s*([^\]]+)\]/gi
+    ];
+    
+    chunkIdPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(responseText)) !== null) {
+        const chunkIdString = match[1];
+        // Split by comma and extract individual chunk IDs
+        const individualIds = chunkIdString.split(',').map(id => id.trim());
+        individualIds.forEach(id => {
+          if (id && !usedChunkIds.includes(id)) {
+            usedChunkIds.push(id);
+          }
+        });
       }
-    }
+    });
     
     console.log(`🔍 Extracted chunk IDs from response: ${usedChunkIds.join(', ')}`);
 
     // Clean up the response by removing the chunk ID markers
-    const cleanResponse = responseText.replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*\w+\]/g, '').trim();
+    // More comprehensive regex to catch all variations, including comma-separated lists
+    const cleanResponse = responseText
+      .replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*[^\]]+\]/gi, '')
+      .replace(/\[USED_CHUNK:\s*[^\]]+\]/gi, '')
+      .replace(/\[CHUNK_ID:\s*[^\]]+\]/gi, '')
+      .replace(/\s+/g, ' ') // Clean up extra whitespace
+      .trim();
 
     return {
       response: cleanResponse,
@@ -586,13 +688,35 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
     );
 
     const usedChunkIds: string[] = [];
-    const chunkIdPattern = /\[(?:USED_CHUNK|CHUNK_ID):\s*(\w+)\]/gi;
-    let match;
-    while ((match = chunkIdPattern.exec(responseText)) !== null) {
-      if (!usedChunkIds.includes(match[1])) usedChunkIds.push(match[1]);
-    }
+    // More flexible pattern to catch variations in citation format, including comma-separated lists
+    const chunkIdPatterns = [
+      /\[USED_CHUNK:\s*([^\]]+)\]/gi,
+      /\[CHUNK_ID:\s*([^\]]+)\]/gi,
+      /\[(?:USED_CHUNK|CHUNK_ID):\s*([^\]]+)\]/gi
+    ];
+    
+    chunkIdPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(responseText)) !== null) {
+        const chunkIdString = match[1];
+        // Split by comma and extract individual chunk IDs
+        const individualIds = chunkIdString.split(',').map(id => id.trim());
+        individualIds.forEach(id => {
+          if (id && !usedChunkIds.includes(id)) {
+            usedChunkIds.push(id);
+          }
+        });
+      }
+    });
 
-    const cleanResponse = responseText.replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*\w+\]/g, '').trim();
+    // Clean up the response by removing the chunk ID markers
+    // More comprehensive regex to catch all variations, including comma-separated lists
+    const cleanResponse = responseText
+      .replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*[^\]]+\]/gi, '')
+      .replace(/\[USED_CHUNK:\s*[^\]]+\]/gi, '')
+      .replace(/\[CHUNK_ID:\s*[^\]]+\]/gi, '')
+      .replace(/\s+/g, ' ') // Clean up extra whitespace
+      .trim();
     return { response: cleanResponse, usedChunkIds };
   }
 }
