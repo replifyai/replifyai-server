@@ -20,7 +20,7 @@ export async function generateGroqChatResponse(
   } = {}
 ): Promise<string> {
   const {
-    model = "llama-3.3-70b-versatile", // Use a fast, production-ready model
+    model = env.GROQ_MODEL, // Use a fast, production-ready model
     temperature = 0.1,
     maxTokens = 1000,
   } = options;
