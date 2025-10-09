@@ -51,13 +51,13 @@ export async function createEmbedding(
   const provider = options.provider || env.EMBEDDING_PROVIDER as EmbeddingProvider;
   
   try {
-    switch (provider) {
-      case 'nebius':
-        return await createNebiusEmbedding(text, options.model);
-      case 'openai':
-      default:
-        return await createOpenAIEmbedding(text, options.model);
-    }
+    return await createNebiusEmbedding(text, options.model);
+    // switch (provider) {
+    //   case 'nebius':
+    //   case 'openai':
+    //   default:
+    //     return await createOpenAIEmbedding(text, options.model);
+    // }
   } catch (error) {
     throw new Error(`Failed to create embedding with ${provider}: ${(error as Error).message}`);
   }
