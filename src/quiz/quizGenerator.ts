@@ -1,5 +1,5 @@
-import { openai } from '../services/openai.js';
-import { qdrantService } from '../services/qdrantHybrid.js';
+import { openai } from '../services/llm/openai.js';
+import { qdrantService } from '../features/rag/providers/qdrantHybrid.js';
 import {
   QuizGenerationRequest,
   QuizGenerationResponse,

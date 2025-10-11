@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { env } from "../env.js";
+import { env } from "../../../env.js";
 
 /**
  * Embedding Service

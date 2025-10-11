@@ -1,5 +1,5 @@
-import { ragService } from "./ragService.js";
-import { inferenceProvider } from "./inference.js";
+import { ragService } from "../rag/core/ragService.js";
+import { inferenceProvider } from "../../services/llm/inference.js";
 
 export interface CustomerQueryOptions {
   productName?: string;
