@@ -2,16 +2,15 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage.js";
-import { documentProcessor } from "./services/documentProcessor.js";
-// import { documentProcessor } from "./services/dp1.js";
-import { ragService } from "./services/ragService.js";
-import { batchUploadService } from "./services/batchUploadService.js";
+import { documentProcessor } from "./features/upload/documentProcessor.js";
+import { ragService } from "./features/rag/core/ragService.js";
+import { batchUploadService } from "./features/upload/batchUploadService.js";
 import { insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
 import { generateQuiz, evaluateQuiz } from './quiz/index.js';
-import { qaIngestionService } from "./services/qaIngestionService.js";
-import { WebSocketHandler } from './services/websocketHandler.js';
-import { customerService } from './services/customerService.js';
+import { qaIngestionService } from "./features/upload/qaIngestionService.js";
+import { WebSocketHandler } from './features/realtime/websocketHandler.js';
+import { customerService } from './features/customer/customerService.js';
 import axios from 'axios';
 
 // Extend global type for Slack event deduplication
@@ -189,12 +188,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       try {
         // Process document with URL reference
-        await Promise.race([
-          documentProcessor.processDocument(document, buffer, url),
-          // new Promise((_, reject) => 
-          //   setTimeout(() => reject(new Error('Document processing timeout')), env.API_TIMEOUT)
-          // )
-        ]);
+        await documentProcessor.processDocument(document, buffer, url);
         
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
@@ -273,24 +267,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete document
   app.delete("/api/documents/:id", async (req, res) => {
     try {
-      const id = req.params.id + "";
-      // const document = await storage.getDocument(id);
+      const id = req.params.id;
       
-      // if (!document) {
-      //   return res.status(404).json({ message: "Document not found" });
-      // }
-
       // Delete from vector database
       await documentProcessor.deleteDocumentFromVector(id);
       
       // Delete from storage
-      //@ts-ignore
-      await storage.deleteDocument(id);
+      await storage.deleteDocument(parseInt(id, 10));
       
       res.json({ message: "Document deleted successfully" });
     } catch (error) {
-      //@ts-ignore
-      console.error('Document deletion error:', JSON.stringify(error?.message, null, 2));
+      console.error('Document deletion error:', (error as Error).message);
       res.status(500).json({ message: (error as Error).message });
     }
   });
@@ -303,13 +290,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         retrievalCount, 
         similarityThreshold,
         productName = "",
-        companyContext 
+        companyContext,
+        // New: Enhanced RAG options
+        useEnhancedRAG = true,
+        useReranking = false,
+        useCompression = false,    // ⚡ Default: false for better performance
+        useMultiQuery = true,
+        maxQueries = 2,            // ⚡ Default: 2 (was 5) for better performance
+        finalChunkCount = 12,      // ⚡ Default: 12 (was 10) for balanced mode
+        performanceMode,           // ⚡ New: 'fast' | 'balanced' | 'accurate'
       } = req.body;
       
       if (!message) {
         return res.status(400).json({ message: "Message is required" });
       }
 
+      // Use enhanced RAG if requested
+      if (useEnhancedRAG) {
+        // ⚡ Apply performance mode if specified
+        let config: any = {
+          retrievalCount: retrievalCount || 10,
+          similarityThreshold: similarityThreshold || 0.5,
+          productName: productName,
+          companyContext: companyContext,
+          useReranking,
+          useCompression,
+          useMultiQuery,
+          maxQueries,
+          finalChunkCount,
+        };
+
+        // Apply performance preset if specified
+        if (performanceMode) {
+          const { RAGConfig } = await import('./config/ragConfig.js');
+          const preset = RAGConfig.get(performanceMode as 'fast' | 'balanced' | 'accurate');
+          config = { ...preset, ...config }; // User options override preset
+        }
+
+        const result = await ragService.queryDocumentsEnhanced(message, config);
+        return res.json(result);
+      }
+
+      // Legacy RAG
       const result = await ragService.queryDocuments(message, {
         retrievalCount: retrievalCount || 10,
         similarityThreshold: similarityThreshold ||  0.5,
@@ -498,109 +520,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
- // Slack bot endpoint
-app.post("/api/slack/events", async (req, res) => {
-  try {
-    const { type, challenge, event, event_id } = req.body;
-    console.log("🚀 ~ registerRoutes ~ req.body:", req.body);
-    const slackRetry = req.headers["x-slack-retry-num"];
-
-    // 1️⃣ Slack URL verification
-    if (type === "url_verification") {
-      console.log("Slack URL verification challenge received");
-      return res.send({ challenge });
-    }
-
-    // 2️⃣ Handle Slack retries (prevents duplicate calls)
-    if (slackRetry) {
-      console.log(`🔁 Slack retry detected for event_id=${event_id}, ignoring.`);
-      return res.sendStatus(200);
-    }
-
-    // 3️⃣ Deduplication guard (prevents multiple processing of same event)
-    if (!global.processedEvents) global.processedEvents = new Set();
-    if (global.processedEvents.has(event_id)) {
-      console.log(`⚠️ Duplicate event ignored: ${event_id}`);
-      return res.sendStatus(200);
-    }
-    global.processedEvents.add(event_id);
-    setTimeout(() => global.processedEvents?.delete(event_id), 60000); // auto cleanup after 1 min
-
-    // 4️⃣ Process only real user messages
-    if (event && event.type === "message" && !event.bot_id) {
-      const userMessage = event.text;
-      const channel = event.channel;
-      const userId = event.user;
-
-      console.log(`💬 Slack message from user ${userId}: "${userMessage}"`);
-
-      try {
-        // Call your existing chat API
-        const chatResponse = await ragService.queryDocuments(userMessage, {
-          retrievalCount: 10,
-          similarityThreshold: 0.5,
-          productName: "", // Optional contextual param
-        });
-
-        const answer =
-          chatResponse.response ||
-          "Sorry, I couldn't find an answer to your question.";
-
-        // Send response back to Slack
-        const slackResponse = await axios.post(
-          "https://slack.com/api/chat.postMessage",
-          {
-            channel,
-            text: answer,
-            thread_ts: event.ts, // reply in thread
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        if (!slackResponse.data.ok) {
-          console.error("Slack API error:", slackResponse.data.error);
-        } else {
-          console.log("✅ Sent response to Slack");
-        }
-      } catch (error) {
-        console.error("Error processing Slack message:", error);
-
-        // Send error message back to Slack
-        try {
-          await axios.post(
-            "https://slack.com/api/chat.postMessage",
-            {
-              channel,
-              text: "Sorry, I'm having trouble processing your request. Please try again.",
-              thread_ts: event.ts,
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-                "Content-Type": "application/json",
-              },
-            }
-          );
-        } catch (slackError) {
-          console.error("Failed to send error message to Slack:", slackError);
-        }
-      }
-    }
-
-    // 5️⃣ Always send 200 quickly to stop Slack retries
-    res.sendStatus(200);
-  } catch (error) {
-    console.error("Slack webhook error:", error);
-    res.status(500).json({ message: (error as Error).message });
-  }
-});
-
-
 
   const httpServer = createServer(app);
   // Initialize WebSocket handler for realtime transcription
@@ -610,11 +529,6 @@ app.post("/api/slack/events", async (req, res) => {
 
 // Helper function to extract Google Drive file ID from various URL formats
 function extractGoogleDriveId(url: string): string | null {
-  // Handle different Google Drive URL formats:
-  // https://drive.google.com/file/d/FILE_ID/view
-  // https://drive.google.com/open?id=FILE_ID
-  // https://drive.google.com/uc?id=FILE_ID
-  
   const patterns = [
     /\/file\/d\/([a-zA-Z0-9-_]+)/,  // /file/d/FILE_ID
     /[?&]id=([a-zA-Z0-9-_]+)/,      // ?id=FILE_ID or &id=FILE_ID

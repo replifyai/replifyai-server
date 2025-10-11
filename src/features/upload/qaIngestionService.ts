@@ -1,6 +1,6 @@
-import { createEmbedding } from "./embeddingService.js";
-import { extractDocumentMetadata } from "./openai.js";
-import { qdrantService } from "./qdrantHybrid.js";
+import { createEmbedding } from "../rag/providers/embeddingService.js";
+import { extractDocumentMetadata } from "../../services/llm/openai.js";
+import { qdrantService } from "../rag/providers/qdrantHybrid.js";
 
 export interface QAPairInput {
   query: string;

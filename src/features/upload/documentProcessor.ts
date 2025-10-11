@@ -1,8 +1,8 @@
-import { createEmbedding } from "./embeddingService.js";
-import { extractDocumentMetadata } from "./openai.js";
-import { qdrantService } from "./qdrantHybrid.js";
-import { storage } from "../storage.js";
-import type { Document } from "../../shared/schema.js";
+import { createEmbedding } from "../rag/providers/embeddingService.js";
+import { extractDocumentMetadata } from "../../services/llm/openai.js";
+import { qdrantService } from "../rag/providers/qdrantHybrid.js";
+import { storage } from "../../storage.js";
+import type { Document } from "../../../shared/schema.js";
 import mammoth from "mammoth";
 import pdf2json from "pdf2json";
 import OpenAI from "openai";

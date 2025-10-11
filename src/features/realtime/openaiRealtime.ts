@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { env } from "../env.js";
+import { env } from "../../env.js";
 
 export interface RealtimeTranscriptionOptions {
   model?: "whisper-1" | "gpt-4o-transcribe" | "gpt-4o-mini-transcribe";
