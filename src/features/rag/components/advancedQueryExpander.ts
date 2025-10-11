@@ -54,7 +54,7 @@ export class AdvancedQueryExpander {
     const normalizedQuery = this.normalizeQuery(query, detectedProducts);
 
     // Step 2.5: Detect if this is a comparison query with multiple products
-    const isComparison = this.isComparisonQuery(normalizedQuery);
+    const isComparison = await this.isComparisonQuery(normalizedQuery);
     const isMultiProduct = detectedProducts.length > 1;
 
     // Step 3: Classify query type and determine if RAG is needed
@@ -118,26 +118,78 @@ export class AdvancedQueryExpander {
   }
 
   /**
-   * Check if query is a comparison query
+   * Check if query is a comparison query using GPT-4o-mini for robust detection
    */
-  private isComparisonQuery(query: string): boolean {
-    const comparisonKeywords = [
-      'difference',
-      'compare',
-      'comparison',
-      'versus',
-      'vs',
-      'between',
-      'or',
-      'which is better',
-      'better than',
-      'differ from',
-      'similar to',
-      'contrast',
-    ];
+  private async isComparisonQuery(query: string): Promise<boolean> {
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a query classifier. Determine if the user's query is a COMPARISON query.
 
-    const lowerQuery = query.toLowerCase();
-    return comparisonKeywords.some(keyword => lowerQuery.includes(keyword));
+A comparison query asks to compare, contrast, or evaluate differences/similarities between 2 or more items, products, or options.
+
+Examples of COMPARISON queries:
+- "What's the difference between Product A and Product B?"
+- "Compare Product X and Product Y"
+- "Which is better: Option A or Option B?"
+- "Product A vs Product B"
+- "How does X differ from Y?"
+- "Is X similar to Y?"
+- "Contrast A and B"
+
+Examples of NON-COMPARISON queries:
+- "What are the features of Product A?"
+- "How much does Product A cost?"
+- "Tell me about Product A"
+- "Is Product A good for running?"
+- "What colors does Product A come in?"
+
+Respond with ONLY a JSON object:
+{"isComparison": true} or {"isComparison": false}
+
+Be strict: Only return true if the query explicitly asks to compare or contrast multiple items.`
+          },
+          {
+            role: 'user',
+            content: query
+          }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 20,
+        response_format: { type: "json_object" }
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) return false;
+
+      const parsed = JSON.parse(content);
+      const isComparison = parsed.isComparison === true;
+      
+      console.log(`🔍 Comparison Detection (GPT-4o-mini): "${query}" → ${isComparison ? '✅ COMPARISON' : '❌ NOT COMPARISON'}`);
+      
+      return isComparison;
+
+    } catch (error) {
+      console.error('❌ LLM comparison detection failed:', error);
+      // Fallback to keyword-based detection
+      const comparisonKeywords = [
+        'difference',
+        'compare',
+        'comparison',
+        'versus',
+        'vs',
+        'between',
+        'which is better',
+        'better than',
+        'differ from',
+        'contrast',
+      ];
+      const lowerQuery = query.toLowerCase();
+      return comparisonKeywords.some(keyword => lowerQuery.includes(keyword));
+    }
   }
 
   /**

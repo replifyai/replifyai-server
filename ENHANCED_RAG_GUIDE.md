@@ -31,6 +31,13 @@ This document describes the **world-class, production-grade RAG (Retrieval-Augme
 - No fixed chunk count - adapts based on query complexity
 - Weighted scoring combining multiple signals
 
+### 6. **LLM-Powered Response Beautification**
+- Uses GPT-4o-mini to format responses without changing content
+- Supports Markdown and structured plain text formats
+- Intelligent section detection and formatting
+- Preserves ALL original information (only formatting changes)
+- Automatic fallback to original if formatting fails
+
 ## 📊 System Architecture
 
 ```
@@ -153,6 +160,7 @@ Content-Type: application/json
 | `useMultiQuery` | boolean | true | Enable multi-query retrieval |
 | `maxQueries` | number | 5 | Maximum number of query variations |
 | `finalChunkCount` | number | 10 | Number of chunks to use for generation |
+| `formatAsMarkdown` | boolean | false | Format response as Markdown (true) or plain text (false) |
 
 ## 📈 Performance Metrics
 
@@ -227,6 +235,7 @@ const result = await ragService.queryDocumentsEnhanced(
 - Uses GPT-4o for intelligent query analysis
 - Generates 3-5 query variations by default
 - Includes synonyms, related terms, and domain-specific vocabulary
+- **LLM-Powered Comparison Detection**: Uses GPT-4o-mini to accurately detect comparison queries (more reliable than keyword matching)
 
 ### Reranking Algorithm
 - Uses GPT-4o-mini for fast relevance assessment

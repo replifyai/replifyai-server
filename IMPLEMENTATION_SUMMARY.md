@@ -30,11 +30,13 @@ A **production-grade, world-class RAG (Retrieval-Augmented Generation) system** 
 - Detects and normalizes product names using fuzzy matching
 - Generates 3-5 query variations for better recall
 - Classifies queries (greeting, casual, informational, comparison, specification)
+- **LLM-Powered Comparison Detection**: Uses GPT-4o-mini for accurate comparison query detection (more reliable than keyword matching)
 - Adds domain-specific terminology
 - Handles query decomposition
 
 **Techniques Used:**
 - Multi-query generation
+- LLM-based comparison detection with keyword fallback
 - Synonym expansion
 - Context-aware expansion
 - Product-specific query enhancement

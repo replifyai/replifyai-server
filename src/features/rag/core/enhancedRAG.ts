@@ -8,6 +8,7 @@
  * - Dynamic chunk selection
  * - Iterative refinement
  * - Self-reflection and quality checks
+ * - LLM-powered response beautification (Markdown/Plain text)
  */
 
 import { advancedQueryExpander, ExpandedQuery } from "../components/advancedQueryExpander.js";
@@ -36,6 +37,7 @@ export interface EnhancedRAGOptions {
   maxQueries?: number;
   finalChunkCount?: number;
   enableIterativeRefinement?: boolean;
+  formatAsMarkdown?: boolean; // If true, beautify response in .md format; if false, plain text with structure
 }
 
 export interface EnhancedRAGResponse {
@@ -96,6 +98,124 @@ export class EnhancedRAGService {
   ];
 
   /**
+   * Format response with proper structure (Markdown or plain text)
+   */
+  private async beautifyResponse(response: string, formatAsMarkdown: boolean): Promise<string> {
+    if (!response || response.trim().length === 0) {
+      return response;
+    }
+
+    if (formatAsMarkdown) {
+      // Format as proper Markdown
+      return await this.formatAsMarkdownBeautified(response);
+    } else {
+      // Format as structured plain text
+      return await this.formatAsPlainTextBeautified(response);
+    }
+  }
+
+  /**
+   * Format response as proper Markdown using LLM
+   */
+  private async formatAsMarkdownBeautified(response: string): Promise<string> {
+    try {
+      const systemPrompt = `You are a Markdown formatting expert. Format the given text into proper, beautiful Markdown format.
+
+CRITICAL: Do NOT change, add, or remove ANY content. Only apply Markdown formatting to make it readable and well-structured. Preserve ALL information exactly as provided.
+
+Apply proper Markdown syntax for headings, lists, bold text, and spacing.
+
+IMPORTANT: Return ONLY the formatted Markdown content. Do NOT wrap it in code blocks or add any markdown/text labels.`;
+
+      const result = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Format this text into proper Markdown:\n\n${response}` }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 2000,
+      });
+
+      let formatted = result.choices[0]?.message?.content?.trim();
+      
+      if (!formatted) {
+        console.warn('⚠️ Markdown formatting returned empty, using original');
+        return response;
+      }
+
+      // Remove code block wrappers if present (```markdown\n...\n``` or ```\n...\n```)
+      formatted = formatted
+        .replace(/^```markdown\n/i, '')
+        .replace(/^```\n/, '')
+        .replace(/\n```$/, '')
+        .trim();
+
+      console.log('✨ Markdown formatting applied successfully');
+      return formatted;
+
+    } catch (error) {
+      console.error('❌ Markdown formatting failed:', error);
+      // Fallback to original response
+      return response;
+    }
+  }
+
+  /**
+   * Format response as structured plain text using LLM
+   */
+  private async formatAsPlainTextBeautified(response: string): Promise<string> {
+    try {
+      const systemPrompt = `You are a text formatting expert. Format the given text into beautifully structured plain text.
+
+CRITICAL: Do NOT change, add, or remove ANY content. Only apply plain text formatting to make it readable and well-structured. Preserve ALL information exactly as provided.
+
+Use simple, clean formatting:
+- Section headers with proper capitalization
+- Bullet points using "• " or "- " 
+- Numbered lists using "1. ", "2. ", etc.
+- Proper spacing between sections and paragraphs
+- No decorative separators or special characters
+
+Keep it simple and readable. Focus on clarity over decoration.
+
+IMPORTANT: Return ONLY the formatted plain text content. Do NOT wrap it in code blocks or add any labels.`;
+
+      const result = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Format this text into beautiful structured plain text:\n\n${response}` }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 2000,
+      });
+
+      let formatted = result.choices[0]?.message?.content?.trim();
+      
+      if (!formatted) {
+        console.warn('⚠️ Plain text formatting returned empty, using original');
+        return response;
+      }
+
+      // Remove code block wrappers if present
+      formatted = formatted
+        .replace(/^```(?:text|plaintext)?\n/i, '')
+        .replace(/^```\n/, '')
+        .replace(/\n```$/, '')
+        .trim();
+
+      console.log('✨ Plain text formatting applied successfully');
+      return formatted;
+
+    } catch (error) {
+      console.error('❌ Plain text formatting failed:', error);
+      // Fallback to original response
+      return response;
+    }
+  }
+
+  /**
    * Main query method with enhanced RAG pipeline
    */
   async query(query: string, options: EnhancedRAGOptions = {}): Promise<EnhancedRAGResponse> {
@@ -122,6 +242,7 @@ export class EnhancedRAGService {
       maxQueries = 5,
       finalChunkCount = 10,
       enableIterativeRefinement = false,
+      formatAsMarkdown = false,
     } = options;
 
     try {
@@ -316,10 +437,14 @@ export class EnhancedRAGService {
       }
       
       performance.generation = Date.now() - genStart;
+
+      // ==================== Step 7: Beautify Response ====================
+      const beautifiedResponse = await this.beautifyResponse(responseData.response, formatAsMarkdown);
+      
       performance.total = Date.now() - startTime;
 
-      // ==================== Step 7: Analyze Response ====================
-      const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
+      // ==================== Step 8: Analyze Response ====================
+      const contextAnalysis = this.analyzeForMissingContext(query, beautifiedResponse);
 
       // Prepare sources
       const usedChunks = responseData.usedChunkIds.length > 0
@@ -330,7 +455,7 @@ export class EnhancedRAGService {
 
       return {
         query,
-        response: responseData.response,
+        response: beautifiedResponse,
         sources,
         contextAnalysis,
         performance,
@@ -506,7 +631,10 @@ CITATION RULES:
 - Every factual statement must have a citation
 
 RESPONSE FORMAT:
-- Use clear paragraphs or bullet points
+- Structure your response with clear sections (e.g., "Overview:", "Features:", "Specifications:", "Benefits:")
+- Use sections with colons (e.g., "Key Features:") for main topics
+- Use bullet points (starting with "-") for lists
+- Use numbered lists (1. 2. 3.) for sequential information or steps
 - Be specific and detailed
 - Include all relevant properties, features, specifications
 - If multiple sources provide different details, present them clearly
@@ -594,13 +722,15 @@ CRITICAL INSTRUCTIONS:
 6. Cite chunks using [USED_CHUNK: chunk_id] after each statement
 
 COMPARISON FORMAT:
-1. Start with a brief overview of both products
-2. Compare key aspects side-by-side:
-   - Features
-   - Specifications (dimensions, weight, materials)
-   - Design & Comfort
-   - Use Cases & Benefits
-3. Summarize with key differences and recommendations
+1. Start with a section "Overview:" describing both products briefly
+2. Create clear comparison sections with colons:
+   - "Features Comparison:"
+   - "Specifications Comparison:" (dimensions, weight, materials)
+   - "Design & Comfort:"
+   - "Use Cases & Benefits:"
+3. Within each section, use bullet points (starting with "-") for each product
+4. End with "Summary:" highlighting key differences and recommendations
+5. Use structured formatting with sections, bullet points, and clear organization
 
 Context organized by product:
 ${organizedContext}`;

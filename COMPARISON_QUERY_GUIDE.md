@@ -78,6 +78,7 @@ Content-Type: application/json
   "useMultiQuery": true,
   "maxQueries": 3,
   "finalChunkCount": 20,
+  "formatAsMarkdown": true,
   "companyContext": {
     "companyName": "Frido",
     "companyDescription": "Orthopedic and ergonomic products",
@@ -156,6 +157,7 @@ const result = await ragService.queryDocumentsEnhanced(comparisonQuery, {
   useMultiQuery: true,          // CRITICAL: Multi-query per product
   maxQueries: 3,                // 3 queries per product
   finalChunkCount: 20,          // More chunks for comparison (10 per product)
+  formatAsMarkdown: true,       // Format response as Markdown (default: false)
 });
 ```
 
@@ -166,24 +168,73 @@ const result = await ragService.queryDocumentsEnhanced(comparisonQuery, {
 3. **`finalChunkCount: 20`** - Ensures ~10 chunks per product for comprehensive comparison
 4. **`useCompression: false`** - Preserves full context needed for detailed comparison
 5. **`useReranking: true`** - Filters out irrelevant chunks while maintaining balance
+6. **`formatAsMarkdown: true`** - Beautifies response with proper Markdown formatting (headings, lists, bold text)
+
+### Response Formatting Options
+
+The `formatAsMarkdown` parameter controls how the response is formatted using **GPT-4o-mini** for intelligent beautification:
+
+**When `formatAsMarkdown: true`** (Markdown format):
+- Uses LLM to intelligently format response as proper Markdown
+- Section headers become `## Header`
+- Sub-sections become `### Sub-header`
+- Bullet points use `-` prefix
+- Key terms are **bolded**
+- Proper spacing between sections
+- Preserves ALL original content - only formatting changes
+- Ideal for rendering in Markdown-aware UIs
+
+**When `formatAsMarkdown: false`** (Plain text format):
+- Uses LLM to intelligently format response as clean, simple plain text
+- Section headers with proper capitalization
+- Bullet points use `•` or `-` prefix
+- Numbered lists use `1.`, `2.`, etc.
+- Proper spacing between sections
+- No decorative separators or special characters
+- Preserves ALL original content - only formatting changes
+- Ideal for plain text display or chat interfaces
+
+**Benefits of LLM-based Formatting:**
+- ✅ Natural, intelligent formatting - LLM applies proper Markdown/plain text conventions
+- ✅ Context-aware formatting decisions
+- ✅ Handles complex structures automatically
+- ✅ Preserves content integrity (never changes information)
+- ✅ Automatic fallback to original if formatting fails
+- ✅ No need to specify conversion rules - works naturally
 
 ## 🎨 Comparison Detection
 
-### Detected Keywords
+### LLM-Powered Detection
 
-The system automatically detects comparison queries using these keywords:
+The system uses **GPT-4o-mini** for robust and accurate comparison query detection. This provides:
 
-- **difference** - "What's the difference between X and Y?"
-- **compare** - "Compare X and Y"
-- **comparison** - "Comparison of X vs Y"
-- **versus** / **vs** - "X versus Y" or "X vs Y"
-- **between** - "Difference between X and Y"
-- **or** - "X or Y?" (in context of choice)
-- **which is better** - "Which is better: X or Y?"
-- **better than** - "Is X better than Y?"
-- **differ from** - "How does X differ from Y?"
-- **similar to** - "Is X similar to Y?"
-- **contrast** - "Contrast X and Y"
+✅ **Higher Accuracy** - Understands intent beyond simple keywords  
+✅ **Context-Aware** - Detects comparisons even with complex phrasing  
+✅ **Fast** - ~50-100ms response time with GPT-4o-mini  
+✅ **Reliable Fallback** - Uses keyword matching if LLM call fails  
+
+### Detected Comparison Patterns
+
+The LLM classifier identifies these types of comparison queries:
+
+- **Explicit Difference** - "What's the difference between X and Y?"
+- **Direct Comparison** - "Compare X and Y"
+- **Versus/VS** - "X versus Y" or "X vs Y"
+- **Choice Questions** - "Which is better: X or Y?"
+- **Evaluation** - "Is X better than Y?"
+- **Contrast** - "How does X differ from Y?"
+- **Similarity** - "Is X similar to Y?"
+
+### Example Classifications
+
+| Query | Classification | Reason |
+|-------|---------------|---------|
+| "Compare Product A and Product B" | ✅ COMPARISON | Explicit comparison request |
+| "What's better: A or B?" | ✅ COMPARISON | Evaluating between options |
+| "Difference between X and Y" | ✅ COMPARISON | Asking for differences |
+| "Tell me about Product A" | ❌ NOT COMPARISON | Single product query |
+| "Is Product A good?" | ❌ NOT COMPARISON | Single product evaluation |
+| "What colors does A come in?" | ❌ NOT COMPARISON | Single product feature query |
 
 ### Multi-Product Detection
 
@@ -298,7 +349,8 @@ curl -X POST http://localhost:5000/api/chat \
     "useReranking": true,
     "useMultiQuery": true,
     "maxQueries": 3,
-    "finalChunkCount": 20
+    "finalChunkCount": 20,
+    "formatAsMarkdown": true
   }'
 ```
 

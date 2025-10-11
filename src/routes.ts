@@ -299,6 +299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         maxQueries = 2,            // ⚡ Default: 2 (was 5) for better performance
         finalChunkCount = 12,      // ⚡ Default: 12 (was 10) for balanced mode
         performanceMode,           // ⚡ New: 'fast' | 'balanced' | 'accurate'
+        formatAsMarkdown = true,  // New: Format response in Markdown (true) or structured plain text (false)
       } = req.body;
       
       if (!message) {
@@ -318,6 +319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           useMultiQuery,
           maxQueries,
           finalChunkCount,
+          formatAsMarkdown,
         };
 
         // Apply performance preset if specified
