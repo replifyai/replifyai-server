@@ -17,13 +17,15 @@ export interface ChatOptions {
 export async function generateNebiusChatResponse(
   systemPrompt: string,
   userPrompt: string,
-  options: ChatOptions = {}
+  options: ChatOptions = {},
+  llmmodel?: string
 ): Promise<string> {
   const {
-    model = env.NEBIUS_MODEL || "meta-llama/Meta-Llama-3.1-8B-Instruct-fast",
+    model = llmmodel || env.NEBIUS_MODEL || "meta-llama/Meta-Llama-3.1-8B-Instruct-fast",
     temperature = 0.1,
     maxTokens = 1000,
   } = options;
+
 
   const response = await nebius.chat.completions.create({
     model,

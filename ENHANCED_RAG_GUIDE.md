@@ -31,12 +31,13 @@ This document describes the **world-class, production-grade RAG (Retrieval-Augme
 - No fixed chunk count - adapts based on query complexity
 - Weighted scoring combining multiple signals
 
-### 6. **Integrated Response Formatting**
-- Formatting integrated directly into generation step (zero latency overhead)
+### 6. **LLM-Powered Response Beautification**
+- Uses Groq (free, fast) with OpenAI fallback for formatting
 - Supports Markdown and structured plain text formats
 - Intelligent section detection and formatting
 - Preserves ALL original information (only formatting changes)
-- No additional LLM calls required
+- **Dual fallback system**: Groq → OpenAI (GPT-4o-mini) → Original response
+- Cost-effective: Only uses OpenAI if Groq fails
 
 ## 📊 System Architecture
 

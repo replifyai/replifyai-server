@@ -8,7 +8,7 @@
  * - Dynamic chunk selection
  * - Iterative refinement
  * - Self-reflection and quality checks
- * - Integrated response formatting (Markdown/Plain text) in generation step
+ * - LLM-powered response beautification (Markdown/Plain text)
  */
 
 import { advancedQueryExpander, ExpandedQuery } from "../components/advancedQueryExpander.js";
@@ -18,7 +18,7 @@ import { createEmbedding, createBatchEmbeddings } from "../providers/embeddingSe
 import { qdrantService, SearchResult } from "../providers/qdrantHybrid.js";
 import { inferenceProvider } from "../../../services/llm/inference.js";
 import { openai } from "../../../services/llm/openai.js";
-
+import {groq} from "../../../services/llm/groq.js";
 export interface EnhancedRAGOptions {
   retrievalCount?: number;
   similarityThreshold?: number;
@@ -96,6 +96,186 @@ export class EnhancedRAGService {
     /context.*does not include/i,
     /provided context.*does not/i,
   ];
+
+  /**
+   * Format response with proper structure (Markdown or plain text)
+   */
+  private async beautifyResponse(response: string, formatAsMarkdown: boolean): Promise<string> {
+    if (!response || response.trim().length === 0) {
+      return response;
+    }
+
+    if (formatAsMarkdown) {
+      // Format as proper Markdown
+      return await this.formatAsMarkdownBeautified(response);
+    } else {
+      // Format as structured plain text
+      return await this.formatAsPlainTextBeautified(response);
+    }
+  }
+
+  /**
+   * Format response as proper Markdown using LLM (Groq with OpenAI fallback)
+   */
+  private async formatAsMarkdownBeautified(response: string): Promise<string> {
+    const systemPrompt = `You are a Markdown formatting expert. Format the given text into proper, beautiful Markdown format.
+
+CRITICAL: Do NOT change, add, or remove ANY content. Only apply Markdown formatting to make it readable and well-structured. Preserve ALL information exactly as provided.
+
+Apply proper Markdown syntax for headings, lists, bold text, and spacing.
+
+IMPORTANT: Return ONLY the formatted Markdown content. Do NOT wrap it in code blocks or add any markdown/text labels.`;
+
+    const messages = [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: `Format this text into proper Markdown:\n\n${response}` }
+    ];
+
+    // Try Groq first
+    try {
+      const result = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages,
+        temperature: 0.0,
+        max_completion_tokens: 2000,
+      });
+
+      let formatted = result.choices[0]?.message?.content?.trim();
+      
+      if (!formatted) {
+        throw new Error('Groq returned empty response');
+      }
+
+      // Remove code block wrappers if present
+      formatted = formatted
+        .replace(/^```markdown\n/i, '')
+        .replace(/^```\n/, '')
+        .replace(/\n```$/, '')
+        .trim();
+
+      console.log('✨ Markdown formatting applied successfully (Groq)');
+      return formatted;
+
+    } catch (groqError) {
+      console.warn('⚠️ Groq formatting failed, retrying with OpenAI:', groqError);
+      
+      // Fallback to OpenAI
+      try {
+        const result = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages,
+          temperature: 0.0,
+          max_completion_tokens: 2000,
+        });
+
+        let formatted = result.choices[0]?.message?.content?.trim();
+        
+        if (!formatted) {
+          console.warn('⚠️ OpenAI formatting returned empty, using original');
+          return response;
+        }
+
+        // Remove code block wrappers if present
+        formatted = formatted
+          .replace(/^```markdown\n/i, '')
+          .replace(/^```\n/, '')
+          .replace(/\n```$/, '')
+          .trim();
+
+        console.log('✨ Markdown formatting applied successfully (OpenAI fallback)');
+        return formatted;
+
+      } catch (openaiError) {
+        console.error('❌ Both Groq and OpenAI formatting failed:', openaiError);
+        return response;
+      }
+    }
+  }
+
+  /**
+   * Format response as structured plain text using LLM (Groq with OpenAI fallback)
+   */
+  private async formatAsPlainTextBeautified(response: string): Promise<string> {
+    const systemPrompt = `You are a text formatting expert. Format the given text into beautifully structured plain text.
+
+CRITICAL: Do NOT change, add, or remove ANY content. Only apply plain text formatting to make it readable and well-structured. Preserve ALL information exactly as provided.
+
+Use simple, clean formatting:
+- Section headers with proper capitalization
+- Bullet points using "• " or "- " 
+- Numbered lists using "1. ", "2. ", etc.
+- Proper spacing between sections and paragraphs
+- No decorative separators or special characters
+
+Keep it simple and readable. Focus on clarity over decoration.
+
+IMPORTANT: Return ONLY the formatted plain text content. Do NOT wrap it in code blocks or add any labels.`;
+
+    const messages = [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: `Format this text into beautiful structured plain text:\n\n${response}` }
+    ];
+
+    // Try Groq first
+    try {
+      const result = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages,
+        temperature: 0.0,
+        max_completion_tokens: 2000,
+      });
+
+      let formatted = result.choices[0]?.message?.content?.trim();
+      
+      if (!formatted) {
+        throw new Error('Groq returned empty response');
+      }
+
+      // Remove code block wrappers if present
+      formatted = formatted
+        .replace(/^```(?:text|plaintext)?\n/i, '')
+        .replace(/^```\n/, '')
+        .replace(/\n```$/, '')
+        .trim();
+
+      console.log('✨ Plain text formatting applied successfully (Groq)');
+      return formatted;
+
+    } catch (groqError) {
+      console.warn('⚠️ Groq formatting failed, retrying with OpenAI:', groqError);
+      
+      // Fallback to OpenAI
+      try {
+        const result = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages,
+          temperature: 0.0,
+          max_completion_tokens: 2000,
+        });
+
+        let formatted = result.choices[0]?.message?.content?.trim();
+        
+        if (!formatted) {
+          console.warn('⚠️ OpenAI formatting returned empty, using original');
+          return response;
+        }
+
+        // Remove code block wrappers if present
+        formatted = formatted
+          .replace(/^```(?:text|plaintext)?\n/i, '')
+          .replace(/^```\n/, '')
+          .replace(/\n```$/, '')
+          .trim();
+
+        console.log('✨ Plain text formatting applied successfully (OpenAI fallback)');
+        return formatted;
+
+      } catch (openaiError) {
+        console.error('❌ Both Groq and OpenAI formatting failed:', openaiError);
+        return response;
+      }
+    }
+  }
 
   /**
    * Main query method with enhanced RAG pipeline
@@ -301,7 +481,7 @@ export class EnhancedRAGService {
         };
       }
 
-      // ==================== Step 6: Response Generation (with integrated formatting) ====================
+      // ==================== Step 6: Response Generation ====================
       const genStart = Date.now();
       let responseData;
       
@@ -310,19 +490,22 @@ export class EnhancedRAGService {
         responseData = await this.generateComparisonResponse(
           expandedQuery.normalizedQuery,
           finalChunks,
-          expandedQuery.comparisonProducts,
-          formatAsMarkdown
+          expandedQuery.comparisonProducts
         );
       } else if (intent === "query") {
-        responseData = await this.generateResponse(expandedQuery.normalizedQuery, finalChunks, formatAsMarkdown);
+        responseData = await this.generateResponse(expandedQuery.normalizedQuery, finalChunks);
       } else {
-        responseData = await this.generateSalesAgentResponse(expandedQuery.normalizedQuery, finalChunks, formatAsMarkdown);
+        responseData = await this.generateSalesAgentResponse(expandedQuery.normalizedQuery, finalChunks);
       }
       
       performance.generation = Date.now() - genStart;
+
+      // ==================== Step 7: Beautify Response ====================
+      const beautifiedResponse = await this.beautifyResponse(responseData.response, formatAsMarkdown);
+      
       performance.total = Date.now() - startTime;
 
-      // ==================== Step 7: Analyze Response ====================
+      // ==================== Step 8: Analyze Response ====================
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
 
       // Prepare sources
@@ -490,28 +673,8 @@ export class EnhancedRAGService {
    */
   private async generateResponse(
     query: string,
-    contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    formatAsMarkdown: boolean = false
+    contextChunks: Array<{ id: string; content: string; originalData: any }>
   ): Promise<{ response: string; usedChunkIds: string[] }> {
-    const formatInstructions = formatAsMarkdown
-      ? `
-OUTPUT FORMAT - MARKDOWN:
-- Use proper Markdown syntax
-- Main sections: ## Section Name
-- Sub-sections: ### Sub-section Name
-- Bullet points: - Item
-- Bold important terms: **term**
-- Proper spacing between sections
-- Do NOT wrap output in code blocks`
-      : `
-OUTPUT FORMAT - PLAIN TEXT:
-- Use simple, clean plain text formatting
-- Section headers with proper capitalization
-- Bullet points: • Item or - Item
-- Numbered lists: 1. Item
-- Proper spacing between sections
-- No decorative separators`;
-
     const systemPrompt = `You are an AI assistant helping users find information about products.
     
 QUERY: ${query}
@@ -529,15 +692,14 @@ CITATION RULES:
 - Cite multiple chunks if information comes from multiple sources
 - Every factual statement must have a citation
 
-RESPONSE STRUCTURE:
+RESPONSE FORMAT:
 - Structure your response with clear sections (e.g., "Overview:", "Features:", "Specifications:", "Benefits:")
 - Use sections with colons (e.g., "Key Features:") for main topics
-- Use bullet points for lists
-- Use numbered lists for sequential information or steps
+- Use bullet points (starting with "-") for lists
+- Use numbered lists (1. 2. 3.) for sequential information or steps
 - Be specific and detailed
 - Include all relevant properties, features, specifications
 - If multiple sources provide different details, present them clearly
-${formatInstructions}
 
 Context from documents:
 ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
@@ -583,8 +745,7 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
   private async generateComparisonResponse(
     query: string,
     contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    products: string[],
-    formatAsMarkdown: boolean = false
+    products: string[]
   ): Promise<{ response: string; usedChunkIds: string[] }> {
     // Group chunks by product
     const chunksByProduct: Record<string, typeof contextChunks> = {};
@@ -608,25 +769,6 @@ ${productChunks.map(c => c.content).join('\n---\n')}
 `;
     }).join('\n\n');
 
-    const formatInstructions = formatAsMarkdown
-      ? `
-OUTPUT FORMAT - MARKDOWN:
-- Use proper Markdown syntax
-- Main sections: ## Section Name (e.g., ## Overview, ## Features Comparison)
-- Sub-sections: ### Product Name
-- Bullet points: - Item
-- Bold product names and key terms: **term**
-- Proper spacing between sections
-- Do NOT wrap output in code blocks`
-      : `
-OUTPUT FORMAT - PLAIN TEXT:
-- Use simple, clean plain text formatting
-- Section headers with proper capitalization
-- Product sub-headings with proper spacing
-- Bullet points: • Item or - Item
-- No decorative separators
-- Clear spacing between sections`;
-
     const systemPrompt = `You are an AI assistant helping users compare products.
 
 QUERY: ${query}
@@ -648,10 +790,9 @@ COMPARISON FORMAT:
    - "Specifications Comparison:" (dimensions, weight, materials)
    - "Design & Comfort:"
    - "Use Cases & Benefits:"
-3. Within each section, use bullet points for each product
+3. Within each section, use bullet points (starting with "-") for each product
 4. End with "Summary:" highlighting key differences and recommendations
 5. Use structured formatting with sections, bullet points, and clear organization
-${formatInstructions}
 
 Context organized by product:
 ${organizedContext}`;
@@ -696,10 +837,8 @@ ${organizedContext}`;
    */
   private async generateSalesAgentResponse(
     query: string,
-    contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    formatAsMarkdown: boolean = false
+    contextChunks: Array<{ id: string; content: string; originalData: any }>
   ): Promise<{ response: string; usedChunkIds: string[] }> {
-    // Sales agent responses are short paragraphs, formatting is minimal
     const systemPrompt = `You are a friendly, consultative sales agent.
 Style: natural, human, second-person, approachable; mirror user's wording; avoid jargon.
 Goal: understand need, recommend from ONLY provided context, highlight 2-3 benefits, propose clear CTA.

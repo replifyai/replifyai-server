@@ -194,14 +194,14 @@ The `formatAsMarkdown` parameter controls how the response is formatted using **
 - Preserves ALL original content - only formatting changes
 - Ideal for plain text display or chat interfaces
 
-**Benefits of Integrated Formatting:**
-- ✅ **Zero latency overhead** - Formatting happens in the same LLM call as generation
+**Benefits of LLM-based Formatting:**
 - ✅ Natural, intelligent formatting - LLM applies proper Markdown/plain text conventions
 - ✅ Context-aware formatting decisions
 - ✅ Handles complex structures automatically
 - ✅ Preserves content integrity (never changes information)
-- ✅ Cost-effective - No additional LLM calls needed
+- ✅ **Dual fallback system**: Groq (free, fast) → OpenAI (reliable) → Original response
 - ✅ No need to specify conversion rules - works naturally
+- ✅ Cost-effective: Uses free Groq by default, only pays for OpenAI if needed
 
 ## 🎨 Comparison Detection
 
