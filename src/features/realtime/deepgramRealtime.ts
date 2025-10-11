@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { env } from "../env.js";
+import { env } from "../../env.js";
 
 export interface DGTranscriptionOptions {
   language?: string; // e.g., "en-US" or "hi-IN"

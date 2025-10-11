@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
 import { createTranscriptionService } from "./transcription.js";
-import { generateAssistantSuggestion } from "./assistant.js";
+import { generateAssistantSuggestion } from "../../services/assistant.js";
 
 interface ClientSession {
   id: string;

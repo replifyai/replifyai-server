@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import { env } from "../env.js";
+import { env } from "../../env.js";
 
 // Initialize Groq client
 const groq = new Groq({

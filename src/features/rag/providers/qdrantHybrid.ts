@@ -3,7 +3,7 @@
  * Includes improved error handling, batching, and debugging
  */
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { env } from "../env.js";
+import { env } from "../../../env.js";
 import { randomUUID } from 'crypto';
 
 // Business logic interfaces - keep existing

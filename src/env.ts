@@ -58,6 +58,7 @@ export const env = {
   
   // Slack
   SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN || '',
+  PRODUCTS_API_URL: process.env.PRODUCTS_API_URL || 'https://slackinteractivity-4nnrh34aza-el.a.run.app',
   
   // Company Context
   COMPANY_NAME: process.env.COMPANY_NAME || 'our company',

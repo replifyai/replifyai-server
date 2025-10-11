@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { env } from "../env.js";
+import { env } from "../../env.js";
 
 // Nebius Studio exposes an OpenAI-compatible API. We use the OpenAI SDK with a custom baseURL.
 const nebius = new OpenAI({

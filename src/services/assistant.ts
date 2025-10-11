@@ -1,5 +1,5 @@
-import { ragService } from "./ragService.js";
-import { inferenceProvider } from "./inference.js";
+import { ragService } from "../features/rag/core/ragService.js";
+import { inferenceProvider } from "./llm/inference.js";
 export interface AssistantOptions {
   useRAG?: boolean;
   productName?: string;

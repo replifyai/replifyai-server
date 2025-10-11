@@ -1,12 +1,12 @@
-import { createEmbedding } from "./embeddingService.js";
-import { qdrantService } from "./qdrantHybrid.js";
-import { storage } from "../storage.js";
-import { inferenceProvider } from "./inference.js";
-import { openai } from "./openai.js";
-import { env } from "../env.js";
+import { createEmbedding } from "../providers/embeddingService.js";
+import { qdrantService } from "../providers/qdrantHybrid.js";
+import { storage } from "../../../storage.js";
+import { inferenceProvider } from "../../../services/llm/inference.js";
+import { openai } from "../../../services/llm/openai.js";
+import { env } from "../../../env.js";
+import { enhancedRAGService, EnhancedRAGOptions } from "./enhancedRAG.js";
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
-  // confidence: number;
   suggestedTopics: string[];
   category: string;
   priority: 'low' | 'medium' | 'high';
@@ -28,6 +28,32 @@ export interface RAGResponse {
 }
 
 export class RAGService {
+  /**
+   * 🚀 NEW: Enhanced RAG query with production-grade features
+   * - Fuzzy product name matching
+   * - Multi-query retrieval
+   * - Reranking
+   * - Contextual compression
+   * - Dynamic chunk selection
+   */
+  async queryDocumentsEnhanced(query: string, options: EnhancedRAGOptions = {}): Promise<RAGResponse> {
+    try {
+      // Use the enhanced RAG service
+      const enhancedResponse = await enhancedRAGService.query(query, options);
+
+      // Convert to RAGResponse format for backward compatibility
+      return {
+        query: enhancedResponse.query,
+        response: enhancedResponse.response,
+        sources: enhancedResponse.sources,
+        contextAnalysis: enhancedResponse.contextAnalysis,
+      };
+    } catch (error: any) {
+      console.error("Enhanced RAG query failed:", error);
+      throw new Error(`Failed to process enhanced query: ${error.message}`);
+    }
+  }
+
   // Patterns that indicate missing context
   private readonly MISSING_CONTEXT_PATTERNS = [
     /don't have enough information/i,
@@ -55,7 +81,7 @@ export class RAGService {
     companyName?: string;
     companyDescription?: string;
     productCategories?: string;
-  }): Promise<{
+  }, productName?: string): Promise<{
     expandedQuery: string;
     needsRAG: boolean;
     queryType: 'greeting' | 'casual' | 'informational' | 'unknown';
@@ -68,6 +94,11 @@ export class RAGService {
       productCategories: companyContext?.productCategories || env.PRODUCT_CATEGORIES
     };
 
+    // Build product-specific context
+    const productContext = productName 
+      ? `\n- Specific Product: ${productName}\n- Focus: All query expansions should be specific to "${productName}" and its features, specifications, and use cases.`
+      : '';
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -76,13 +107,13 @@ export class RAGService {
 Company Context:
 - Company: ${contextInfo.companyName}
 - About: ${contextInfo.companyDescription}
-- Products/Services: ${contextInfo.productCategories}
+- Product asked in query: ${productContext}
 
 Analyze the user query and determine:
 1. Query type: greeting, casual, or informational
 2. Whether RAG (document retrieval) is needed
 3. If no RAG needed, provide a direct friendly and contextual response that mentions the company/product naturally
-4. If RAG needed, expand the query with domain-specific terminology based on company context
+4. If RAG needed, expand the query with domain-specific terminology based on company context${productName ? ` and specifically for "${productName}"` : ''}
 
 Return a JSON object:
 {
@@ -93,25 +124,26 @@ Return a JSON object:
 }
 
 Guidelines for direct responses (greetings/casual):
-- For greetings: Be warm, mention the company name naturally, and offer help with products/services
+- For greetings: Be warm, mention the company name naturally, and offer help with products/services${productName ? ` (especially "${productName}")` : ''}
 - For casual chat: Be friendly and contextual, subtly reference what you can help with
 - Keep responses concise (1-2 sentences max)
 - Always end with an invitation to ask about products/services
 
 Guidelines for query expansion (informational queries):
 - Include synonyms and related concepts from the original query
-- Add domain-specific terms relevant to ${contextInfo.productCategories}
+- Add domain-specific terms relevant to ${contextInfo.productCategories}${productName ? ` and specifically for "${productName}"` : ''}
 - Include variations that match the company's product/service offerings
 - Keep expansion focused and relevant (avoid generic terms)
 - Make it semantically rich for better vector search retrieval
+${productName ? `- IMPORTANT: Always include "${productName}" and its variations in the expanded query to ensure product-specific results` : ''}
 
 Examples:
-- "hi" → {"queryType": "greeting", "needsRAG": false, "directResponse": "Hello! Welcome to ${contextInfo.companyName}. I'm here to help you with any questions about our ${contextInfo.productCategories.split(',')[0]}. What would you like to know?"}
+- "hi" → {"queryType": "greeting", "needsRAG": false, "directResponse": "Hello! Welcome to ${contextInfo.companyName}. I'm here to help you with any questions about our ${contextInfo.productCategories.split(',')[0]}${productName ? `, especially ${productName}` : ''}. What would you like to know?"}
 - "hello" → {"queryType": "greeting", "needsRAG": false, "directResponse": "Hi there! I'm your ${contextInfo.companyName} assistant. Feel free to ask me anything about our products and services!"}
 - "how are you" → {"queryType": "casual", "needsRAG": false, "directResponse": "I'm doing great, thanks for asking! Ready to help you explore our solutions. What brings you here today?"}
 - "thank you" → {"queryType": "casual", "needsRAG": false, "directResponse": "You're very welcome! Let me know if you need anything else about our products or services."}
-- "what are the product features?" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "product features specifications capabilities functionalities benefits key attributes ${contextInfo.productCategories} product details"}
-- If company sells "orthopedic insoles" and query is "best for running" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "running insoles athletic orthopedic support sports insoles arch support for runners plantar support performance footwear active lifestyle"}` },
+- "what are the product features?" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "product features specifications capabilities functionalities benefits key attributes ${contextInfo.productCategories} product details${productName ? ` ${productName} features ${productName} specifications ${productName} capabilities` : ''}"}
+- If company sells "orthopedic insoles" and query is "best for running"${productName ? ` for product "${productName}"` : ''} → {"queryType": "informational", "needsRAG": true, "expandedQuery": "running insoles athletic orthopedic support sports insoles arch support for runners plantar support performance footwear active lifestyle${productName ? ` ${productName} running ${productName} athletic ${productName} sports` : ''}"}` },
         { role: "user", content: query },
       ],
       max_completion_tokens: 500,
@@ -141,12 +173,10 @@ Examples:
       productCategories?: string;
     };
   } = {}): Promise<RAGResponse> {
-    console.log("🚀 ~ RAGService ~ queryDocuments ~ options:", options);
     const { retrievalCount = 10, similarityThreshold = 0.5, productName = "", intent = "query", skipGeneration = false, companyContext } = options;
     try {
       // Analyze and expand the query with company context
-      const queryAnalysis = await this.expandQuery(query, companyContext);
-      console.log("🚀 ~ RAGService ~ queryDocuments ~ queryAnalysis:", queryAnalysis);
+      const queryAnalysis = await this.expandQuery(query, companyContext, productName);
       
       // If RAG is not needed (greeting/casual), return direct response
       if (!queryAnalysis.needsRAG && queryAnalysis.directResponse) {
@@ -179,7 +209,6 @@ Examples:
 
         // Analyze this response for context missing
         const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
-        console.log(`No search results for query: "${query}" - Category: ${contextAnalysis.category}`);
 
         return {
           query,
@@ -195,9 +224,6 @@ Examples:
       // Since we already have product-specific chunks from Qdrant, just sort by similarity score
       const sortedChunks = searchResults
         .sort((a, b) => b.score - a.score);
-
-      console.log(`🔍 RAG Query: "${query}"`);
-      console.log(`📊 Retrieved chunks: ${searchResults.length}`);
 
       // Prepare context from search results with chunk IDs
       const contextChunks = sortedChunks.map((result, index) => {
@@ -250,20 +276,15 @@ Examples:
       } else {
         responseData = await this.generateSalesAgentResponse(query, contextChunks);
       }
-      console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData:", responseData);
 
       // Analyze response for missing context
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
-
-      console.log("🚀 ~ RAGService ~ queryDocuments ~ responseData.usedChunkIds:", JSON.stringify(responseData?.usedChunkIds, null, 2));
       
       // If no chunks were explicitly cited, include all retrieved chunks as sources
       // This ensures we always have sources even if the LLM doesn't follow citation format
       const chunksToInclude = responseData.usedChunkIds.length > 0 
         ? contextChunks.filter(chunk => responseData.usedChunkIds.includes(chunk.id))
         : contextChunks;
-
-      console.log(`📚 Including ${chunksToInclude.length} chunks as sources (${responseData.usedChunkIds.length} explicitly cited)`);
 
       // Prepare sources information, ensuring unique sourceUrls
       const uniqueSourceUrls = new Set<string>();
@@ -291,12 +312,6 @@ Examples:
           uploadType: chunk.originalData.metadata?.uploadType,
         }));
 
-      // If context is missing, store the analysis for analytics
-      if (contextAnalysis.isContextMissing) {
-        console.log(`Context missing detected for query: "${query}" - Category: ${contextAnalysis.category}`);
-      }
-
-      console.log(`📚 Used ${chunksToInclude.length} out of ${sortedChunks.length} chunks for response`);
 
       return {
         query,
@@ -312,7 +327,7 @@ Examples:
   }
 
   /**
-   * Generate response with sophisticated context handling and query intent analysis
+   * Generate response with sophisticated context handling
    */
   private async generateResponse(query: string, contextChunks: Array<{
     id: string;
@@ -322,10 +337,6 @@ Examples:
     response: string;
     usedChunkIds: string[];
   }> {
-
-    // Get query analysis for enhanced prompting
-    // const queryAnalysis = await this.analyzeQueryIntent(query);
-
     const systemPrompt = `
     You are an AI assistant for the whole company, which help in giving informative answers to the user queries.
     
@@ -379,7 +390,6 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
       let match;
       while ((match = pattern.exec(responseText)) !== null) {
         const chunkIdString = match[1];
-        // Split by comma and extract individual chunk IDs
         const individualIds = chunkIdString.split(',').map(id => id.trim());
         individualIds.forEach(id => {
           if (id && !usedChunkIds.includes(id)) {
@@ -388,8 +398,6 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
         });
       }
     });
-    
-    console.log(`🔍 Extracted chunk IDs from response: ${usedChunkIds.join(', ')}`);
 
     // Clean up the response by removing the chunk ID markers
     // More comprehensive regex to catch all variations, including comma-separated lists
@@ -406,69 +414,6 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     };
   }
 
-  /**
-   * Analyze query intent to provide better context-aware responses
-   */
-  private async analyzeQueryIntent(query: string): Promise<{
-    primaryIntent: string;
-    specificTerms: string[];
-    contextRequirements: string[];
-    conflictingTerms: string[];
-    entityType: string;
-    attributeType: string;
-  }> {
-    try {
-      const responseText = await inferenceProvider.chatCompletion(
-        `You are an expert query analyzer. Analyze the user's query to understand their specific intent and context requirements.
-
-Your task is to identify:
-1. What the user is primarily looking for (primary intent)
-2. Specific terms that must be present in relevant content
-3. Context requirements that content must satisfy
-4. Terms that would indicate conflicting or irrelevant content
-5. The type of entity they're asking about (product, package, service, etc.)
-6. The type of attribute they want (dimensions, weight, specifications, etc.)
-
-Return a JSON object with this structure:
-{
-  "primaryIntent": "Brief description of what user wants",
-  "specificTerms": ["term1", "term2"],
-  "contextRequirements": ["requirement1", "requirement2"],
-  "conflictingTerms": ["conflicting1", "conflicting2"],
-  "entityType": "product|package|service|document|general",
-  "attributeType": "dimensions|weight|specifications|price|features|general"
-}
-
-Examples:
-- "What are the product dimensions?" → entity: "product", attribute: "dimensions", conflicting: ["packaging", "box", "container"]
-- "What is the packaging weight?" → entity: "package", attribute: "weight", conflicting: ["product", "item", "device"]
-- "How much does shipping cost?" → entity: "service", attribute: "price", conflicting: ["product", "item"]`,
-        query,
-        { temperature: 0.1, maxTokens: 500 }
-      );
-
-      const result = JSON.parse(responseText || '{}');
-      return {
-        primaryIntent: result.primaryIntent || 'General information',
-        specificTerms: result.specificTerms || [],
-        contextRequirements: result.contextRequirements || [],
-        conflictingTerms: result.conflictingTerms || [],
-        entityType: result.entityType || 'general',
-        attributeType: result.attributeType || 'general'
-      };
-    } catch (error) {
-      console.error('Query intent analysis failed:', error);
-      // Fallback to basic analysis
-      return {
-        primaryIntent: 'General information',
-        specificTerms: [],
-        contextRequirements: [],
-        conflictingTerms: [],
-        entityType: 'general',
-        attributeType: 'general'
-      };
-    }
-  }
 
   /**
    * Analyze if a response indicates missing context
@@ -550,15 +495,6 @@ Examples:
     return { suggestedTopics, category, priority };
   }
 
-  /**
-   * Calculate confidence score based on detected patterns
-   */
-  // private calculateConfidence(patterns: string[]): number {
-  //   if (patterns.length === 0) return 0;
-  //   if (patterns.length >= 3) return 0.95;
-  //   if (patterns.length === 2) return 0.85;
-  //   return 0.75;
-  // }
 
   async getSystemStats(): Promise<{
     documentCount: number;
@@ -661,15 +597,13 @@ Examples:
   }
 
   /**
-   * SALES AGENT: Generate a persuasive, helpful response grounded ONLY in provided context.
-   * Returns response plus the chunk ids it referenced (same mechanism as the standard generator).
+   * Generate a persuasive, helpful sales-focused response
    */
   private async generateSalesAgentResponse(query: string, contextChunks: Array<{
     id: string;
     content: string;
     originalData: any;
   }>): Promise<{ response: string; usedChunkIds: string[] }> {
-    console.log("🚀 ~ RAGService ~ generateSalesAgentResponse ~ query:", query);
     const systemPrompt = `You are a friendly, consultative sales agent.
 Style: natural, human, second-person, and approachable; mirror the user's wording; avoid jargon.
 Goal: understand the need, recommend from ONLY the provided context, highlight 2–3 benefits, and propose a clear CTA.
@@ -687,19 +621,28 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
       { temperature: 0.4, maxTokens: 240 }
     );
 
+    // Extract used chunk IDs
+    const usedChunkIds = this.extractChunkIds(responseText);
+    
+    // Clean up the response
+    const cleanResponse = this.cleanChunkMarkers(responseText);
+    return { response: cleanResponse, usedChunkIds };
+  }
+
+  /**
+   * Helper: Extract chunk IDs from response text
+   */
+  private extractChunkIds(responseText: string): string[] {
     const usedChunkIds: string[] = [];
-    // More flexible pattern to catch variations in citation format, including comma-separated lists
     const chunkIdPatterns = [
       /\[USED_CHUNK:\s*([^\]]+)\]/gi,
       /\[CHUNK_ID:\s*([^\]]+)\]/gi,
-      /\[(?:USED_CHUNK|CHUNK_ID):\s*([^\]]+)\]/gi
     ];
     
     chunkIdPatterns.forEach(pattern => {
       let match;
       while ((match = pattern.exec(responseText)) !== null) {
         const chunkIdString = match[1];
-        // Split by comma and extract individual chunk IDs
         const individualIds = chunkIdString.split(',').map(id => id.trim());
         individualIds.forEach(id => {
           if (id && !usedChunkIds.includes(id)) {
@@ -708,16 +651,18 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
         });
       }
     });
+    
+    return usedChunkIds;
+  }
 
-    // Clean up the response by removing the chunk ID markers
-    // More comprehensive regex to catch all variations, including comma-separated lists
-    const cleanResponse = responseText
+  /**
+   * Helper: Clean chunk markers from response text
+   */
+  private cleanChunkMarkers(responseText: string): string {
+    return responseText
       .replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*[^\]]+\]/gi, '')
-      .replace(/\[USED_CHUNK:\s*[^\]]+\]/gi, '')
-      .replace(/\[CHUNK_ID:\s*[^\]]+\]/gi, '')
-      .replace(/\s+/g, ' ') // Clean up extra whitespace
+      .replace(/\s+/g, ' ')
       .trim();
-    return { response: cleanResponse, usedChunkIds };
   }
 }
 

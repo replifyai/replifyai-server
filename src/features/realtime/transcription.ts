@@ -1,6 +1,6 @@
 import { OpenAIRealtimeService, RealtimeTranscriptionOptions as OAOpts } from "./openaiRealtime.js";
 import { DeepgramRealtimeService } from "./deepgramRealtime.js";
-import { env } from "../env.js";
+import { env } from "../../env.js";
 
 export interface RealtimeTranscriptionOptions extends OAOpts {
   provider?: "openai" | "deepgram";
