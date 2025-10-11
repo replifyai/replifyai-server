@@ -31,12 +31,12 @@ This document describes the **world-class, production-grade RAG (Retrieval-Augme
 - No fixed chunk count - adapts based on query complexity
 - Weighted scoring combining multiple signals
 
-### 6. **LLM-Powered Response Beautification**
-- Uses GPT-4o-mini to format responses without changing content
+### 6. **Integrated Response Formatting**
+- Formatting integrated directly into generation step (zero latency overhead)
 - Supports Markdown and structured plain text formats
 - Intelligent section detection and formatting
 - Preserves ALL original information (only formatting changes)
-- Automatic fallback to original if formatting fails
+- No additional LLM calls required
 
 ## 📊 System Architecture
 

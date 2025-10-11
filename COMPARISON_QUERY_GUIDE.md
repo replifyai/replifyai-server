@@ -194,12 +194,13 @@ The `formatAsMarkdown` parameter controls how the response is formatted using **
 - Preserves ALL original content - only formatting changes
 - Ideal for plain text display or chat interfaces
 
-**Benefits of LLM-based Formatting:**
+**Benefits of Integrated Formatting:**
+- ✅ **Zero latency overhead** - Formatting happens in the same LLM call as generation
 - ✅ Natural, intelligent formatting - LLM applies proper Markdown/plain text conventions
 - ✅ Context-aware formatting decisions
 - ✅ Handles complex structures automatically
 - ✅ Preserves content integrity (never changes information)
-- ✅ Automatic fallback to original if formatting fails
+- ✅ Cost-effective - No additional LLM calls needed
 - ✅ No need to specify conversion rules - works naturally
 
 ## 🎨 Comparison Detection
