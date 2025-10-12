@@ -28,6 +28,7 @@ export async function generateGroqChatResponse(
   try {
     const response = await groq.chat.completions.create({
       model,
+      service_tier:"auto",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
