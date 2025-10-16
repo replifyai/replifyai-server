@@ -15,7 +15,7 @@ export const FRIDO_PRODUCTS: Product[] = [
   { id: "Frido AeroMesh Ergo Chair", name: "Frido AeroMesh Ergo Chair", aliases: ["AeroMesh Chair", "Aero Mesh Chair"] },
   { id: "Frido Aeroluxe Massage Chair", name: "Frido Aeroluxe Massage Chair", aliases: ["Aeroluxe Chair", "Massage Chair"] },
   { id: "Frido Arch Sports Insole", name: "Frido Arch Sports Insole", aliases: ["Arch Insole", "Sports Insole"] },
-  { id: "Frido Arch Support Insoles - Rigid", name: "Frido Arch Support Insoles - Rigid", aliases: ["Rigid Arch Support", "Rigid Insole"] },
+  { id: "Frido Arch Support Insole - Rigid", name: "Frido Arch Support Insole - Rigid", aliases: ["Rigid Arch Support", "Rigid Insole"] },
   { id: "Frido Arch Support Insoles - Semi Rigid", name: "Frido Arch Support Insoles - Semi Rigid", aliases: ["Semi Rigid Arch Support", "Semi Rigid Insole"] },
   { id: "Frido Ball of Foot Cushion Pro", name: "Frido Ball of Foot Cushion Pro", aliases: ["Ball Cushion Pro", "Foot Cushion Pro"] },
   { id: "Frido Barefoot Sock Shoe Classic", name: "Frido Barefoot Sock Shoe Classic", aliases: ["Barefoot Shoe", "Sock Shoe"] },

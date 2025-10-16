@@ -6,6 +6,9 @@ import type { Document } from "../../../shared/schema.js";
 import mammoth from "mammoth";
 import pdf2json from "pdf2json";
 import OpenAI from "openai";
+import { pdfToPng } from "pdf-to-png-converter";
+import { inferenceProvider } from "../../services/llm/inference.js";
+import * as fs from 'fs';
 
 
 const openai = new OpenAI({
@@ -75,35 +78,81 @@ export class DocumentProcessor {
 
   async processDocument(document: Document, fileBuffer: Buffer, sourceUrl?: string): Promise<void> {
     try {
+      console.log(`\n${'='.repeat(80)}`);
+      console.log(`📄 PROCESSING DOCUMENT: ${document.originalName}`);
+      console.log(`${'='.repeat(80)}\n`);
+
       // Update status to processing
       await storage.updateDocumentStatus(document.id, "processing");
 
       // Extract text with enhanced extraction
+      console.log(`📖 Step 1: Extracting text from ${document.fileType.toUpperCase()} file...`);
       const extractedContent = await this.extractText(fileBuffer, document.fileType);
+      console.log(`✅ Extracted ${extractedContent.text.length} characters`);
+      console.log(`✅ Found ${extractedContent.links.length} links`);
       
+      // Save raw extracted text for debugging
+      const debugDir = './debug_documents';
+      if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+      }
+      const rawTextPath = `${debugDir}/raw_${document.id}.txt`;
+      await fs.promises.writeFile(rawTextPath, extractedContent.text);
+      console.log(`📝 Raw text saved to: ${rawTextPath}`);
+
       // Clean and normalize the extracted text
+      console.log(`\n🧹 Step 2: Cleaning and normalizing text...`);
       const text = this.cleanAndNormalizeText(extractedContent.text);
+      console.log(`✅ Cleaned text: ${text.length} characters (from ${extractedContent.text.length})`);
       
-      console.log(`Extracted text length: ${text.length} characters (cleaned from ${extractedContent.text.length})`);
-      console.log(`Extracted ${extractedContent.links.length} links from document`);
+      // Save cleaned text for debugging
+      const cleanedTextPath = `${debugDir}/cleaned_${document.id}.txt`;
+      await fs.promises.writeFile(cleanedTextPath, text);
+      console.log(`📝 Cleaned text saved to: ${cleanedTextPath}`);
       
       // Validate text quality
-      // if (!this.validateTextQuality(text)) {
-      //   throw new Error("Extracted text quality is too poor for processing");
-      // }
+      const qualityCheck = this.validateTextQuality(text);
+      if (!qualityCheck) {
+        console.warn(`⚠️  Text quality is low, but continuing processing...`);
+      } else {
+        console.log(`✅ Text quality validation passed`);
+      }
       
       // Extract document metadata
+      console.log(`\n📋 Step 3: Extracting document metadata...`);
       const docMetadata = await extractDocumentMetadata(text, document.originalName);
+      console.log(`✅ Document metadata extracted`);
 
       // Determine chunking strategy
       const strategy = this.determineChunkingStrategy(document.originalName, text);
-      console.log(`Using strategy: ${strategy.name}`);
+      console.log(`\n🎯 Step 4: Using chunking strategy: ${strategy.name}`);
 
       // Use AI-powered intelligent chunking
+      console.log(`\n🤖 Step 5: Creating intelligent chunks with AI...`);
       const aiChunkingResult = await this.createAIChunks(text, document.originalName, strategy);
-      console.log("🚀 ~ DocumentProcessor ~ processDocument ~ aiChunkingResult:", JSON.stringify(aiChunkingResult, null, 2));
+      
+      console.log(`✅ Successfully created ${aiChunkingResult.chunks.length} chunks`);
+      console.log(`   Document Type: ${aiChunkingResult.documentType}`);
+      console.log(`   Document Summary: ${aiChunkingResult.documentSummary.substring(0, 100)}...`);
+
+      // Log chunk details
+      console.log(`\n📦 Chunk Details:`);
+      aiChunkingResult.chunks.forEach((chunk, i) => {
+        console.log(`   Chunk ${i + 1}:`);
+        console.log(`      Title: ${chunk.title}`);
+        console.log(`      Length: ${chunk.content.length} chars`);
+        console.log(`      Type: ${chunk.chunkType}`);
+        console.log(`      Importance: ${chunk.importance}/10`);
+        console.log(`      Topics: ${chunk.keyTopics.slice(0, 3).join(', ')}`);
+      });
+
+      // Save chunks for debugging
+      const chunksPath = `${debugDir}/chunks_${document.id}.json`;
+      await fs.promises.writeFile(chunksPath, JSON.stringify(aiChunkingResult, null, 2));
+      console.log(`\n📝 Chunks saved to: ${chunksPath}`);
       
       // Convert AI chunks to ProcessedChunks
+      console.log(`\n🔗 Step 6: Processing chunks and linking...`);
       const processedChunks = aiChunkingResult.chunks.map((aiChunk, index) => {
         // Find links that are relevant to this chunk
         const chunkLinks = this.findRelevantLinks(aiChunk.content, extractedContent.links, text);
@@ -126,21 +175,22 @@ export class DocumentProcessor {
             docMetadata,
             documentSummary: aiChunkingResult.documentSummary,
             documentType: aiChunkingResult.documentType,
-            sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl, // Include source URL if available
+            sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl,
             uploadType: (document.metadata as any)?.uploadType || 'file',
-            // Include all document links for reference
             documentLinks: extractedContent.links
           }
         };
       });
-      console.log("🚀 ~ DocumentProcessor ~ processedChunks ~ processedChunks:", JSON.stringify(processedChunks, null, 2));
 
-      console.log(`Created ${processedChunks.length} AI-powered chunks`);
+      console.log(`✅ Processed ${processedChunks.length} chunks with metadata`);
 
       // Process each chunk
+      console.log(`\n🎨 Step 7: Creating embeddings and storing chunks...`);
       const vectorChunks = [];
       for (let i = 0; i < processedChunks.length; i++) {
         const chunk = processedChunks[i];
+        
+        console.log(`   Processing chunk ${i + 1}/${processedChunks.length}...`);
         
         // Create embedding
         const embedding = await createEmbedding(chunk.content);
@@ -190,7 +240,7 @@ export class DocumentProcessor {
 
         vectorChunks.push({
           id: savedChunk.id,
-          vector: embedding,
+          // vector: embedding,
           payload: {
             documentId: document.id,
             chunkIndex: chunk.chunkIndex,
@@ -202,7 +252,6 @@ export class DocumentProcessor {
             uploadTimestamp: Date.now(),
             originalChunkId: savedChunk.id,
             chunkReference: `${document.id}_${chunk.chunkIndex}`,
-            // Include links in the payload for RAG retrieval
             links: chunk.links || [],
             imageLinks: chunk.links ? chunk.links.filter(link => link.type === 'image') : [],
             externalLinks: chunk.links ? chunk.links.filter(link => link.type === 'link') : [],
@@ -210,15 +259,31 @@ export class DocumentProcessor {
         });
       }
 
+      console.log(`✅ Created ${vectorChunks.length} vector chunks with embeddings`);
+      console.log("🚀 ~ DocumentProcessor ~ processDocument ~ vectorChunks:", JSON.stringify(vectorChunks, null, 2));
+
       // Add to vector database
-      await qdrantService.addPoints(vectorChunks);
-      // Also store the vector chunks in a file for debugging (optional)
-      console.log(`Processed ${vectorChunks.length} chunks with enhanced extraction`);
-      // Update document status
+      // await qdrantService.addPoints(vectorChunks);
+      
+      console.log(`\n💾 Step 8: Updating document status...`);
       await storage.updateDocumentStatus(document.id, "indexed", new Date());
       await storage.updateDocumentChunkCount(document.id, processedChunks.length);
+      
+      console.log(`\n${'='.repeat(80)}`);
+      console.log(`✅ SUCCESSFULLY PROCESSED: ${document.originalName}`);
+      console.log(`   - Total chunks: ${processedChunks.length}`);
+      console.log(`   - Total characters: ${text.length}`);
+      console.log(`   - Total links: ${extractedContent.links.length}`);
+      console.log(`${'='.repeat(80)}\n`);
+
     } catch (error) {
-      console.error("Document processing failed:", error);
+      console.error(`\n${'='.repeat(80)}`);
+      console.error(`❌ PROCESSING FAILED: ${document.originalName}`);
+      console.error(`${'='.repeat(80)}`);
+      console.error(`Error: ${(error as Error).message}`);
+      console.error(`Stack trace:\n${(error as Error).stack}`);
+      console.error(`${'='.repeat(80)}\n`);
+      
       await storage.updateDocumentStatus(document.id, "error");
       throw error;
     }
@@ -232,34 +297,45 @@ export class DocumentProcessor {
     try {
       const prompt = this.buildAIChunkingPrompt(text, filename, strategy);
       
-      console.log("Attempting AI chunking for document:", filename);
+      console.log(`   🤖 Calling OpenAI GPT-4o for intelligent chunking...`);
       
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
           {
             role: "system",
-            content: `You are an expert document analyzer and chunking specialist. Your task is to intelligently break down documents into semantically meaningful chunks that preserve context and are optimized for retrieval-augmented generation (RAG) systems.
+            content: `You are a document chunking specialist. Your task is to divide documents into semantically meaningful chunks.
 
-CRITICAL REQUIREMENTS:
-1. Capture ALL information - do not miss any pricing, measurements, specifications
-2. Preserve semantic boundaries - don't break related information
-3. Create self-contained chunks that make sense independently
-4. Maintain logical flow and context
-5. Identify and properly categorize different types of content
-6. Ensure chunks are appropriately sized for embedding and retrieval
-7. Extract key topics and provide meaningful titles/summaries
-8. Pay special attention to numerical data, prices, and technical specifications
+CRITICAL RULES - READ CAREFULLY:
+1. Use ONLY the text provided - do not add, infer, or create any new information
+2. Each chunk must contain ONLY text that appears verbatim in the source document
+3. Do not rephrase, paraphrase, or rewrite - copy the EXACT text for each chunk
+4. Divide based on natural section boundaries (headings, topics, content changes)
+5. Capture ALL information - nothing should be lost between chunks
+6. Each chunk should be self-contained and make sense independently
+7. Pay special attention to:
+   - Pricing information (exact numbers and currency)
+   - Measurements and specifications (exact values and units)
+   - Product names and model numbers (exact spelling)
+   - Dates and contact information (exact formats)
+8. Maintain logical flow and context
+9. Identify and properly categorize different types of content
 
-Always respond with valid JSON only. No information should be lost during chunking.`
+VALIDATION REQUIREMENTS:
+- Every word in your chunks must exist in the source document
+- All numbers, prices, and measurements must be exact
+- No hallucinations or invented content
+- No summaries that don't reflect actual content
+
+Always respond with valid JSON only. No markdown formatting.`
           },
           {
             role: "user",
             content: prompt
           }
         ],
-        temperature: 0.05,
-        max_tokens: 6000
+        temperature: 0.0, // Zero temperature for maximum consistency
+        max_tokens: 8000
       });
 
       const result = response.choices[0]?.message?.content;
@@ -267,7 +343,7 @@ Always respond with valid JSON only. No information should be lost during chunki
         throw new Error("No response from OpenAI");
       }
 
-      console.log("Raw AI response received, length:", result.length);
+      console.log(`   ✅ Received AI response (${result.length} characters)`);
 
       // Clean the JSON response (remove any markdown formatting)
       let cleanedResult = result.trim();
@@ -281,184 +357,174 @@ Always respond with valid JSON only. No information should be lost during chunki
       let aiResult: AIChunkingResult;
       try {
         aiResult = JSON.parse(cleanedResult);
-        console.log("Successfully parsed AI response");
+        console.log(`   ✅ Successfully parsed JSON response`);
       } catch (parseError) {
-        console.error("JSON parsing failed:", parseError);
-        console.error("Raw response:", result);
+        console.error(`   ❌ JSON parsing failed:`, parseError);
+        console.error(`   Raw response preview:`, result.substring(0, 500));
         throw new Error(`Failed to parse AI response as JSON: ${(parseError as Error).message}`);
       }
       
-      // Validate and clean the result
+      // Validate and clean the result (WITH HALLUCINATION DETECTION)
+      console.log(`   🔍 Validating chunks for hallucinations...`);
       const validatedResult = this.validateAndCleanAIResult(aiResult, strategy, text);
-      console.log("AI chunking completed successfully with", validatedResult.chunks.length, "chunks");
+      console.log(`   ✅ Validation complete: ${validatedResult.chunks.length} valid chunks`);
+      
       return validatedResult;
       
     } catch (error) {
-      console.error("AI chunking failed for", filename, ":", error);
-      console.log("Falling back to enhanced simple chunking");
+      console.error(`   ❌ AI chunking failed:`, (error as Error).message);
+      console.log(`   🔄 Falling back to enhanced simple chunking...`);
+      
       // Fallback to enhanced simple chunking
       return this.createEnhancedFallbackChunks(text, filename, strategy);
     }
   }
 
   private buildAIChunkingPrompt(text: string, filename: string, strategy: ChunkingStrategy): string {
-    // Analyze document structure and content
-    const analysis = this.analyzeTextStructure(text);
-    const isProductDoc = this.isProductDocument(text);
-    const keyInfoPatterns = this.extractKeyInformation(text);
-  
-    // Build adaptive instructions based on document analysis
-    const adaptiveInstructions = this.buildAdaptiveInstructions(analysis, isProductDoc, keyInfoPatterns);
-  
-    return `
-  Analyze the entire document and divide it into logically grouped, information-rich chunks suitable for a RAG system.  
-  **Every chunk must maximize recall and precision for semantic search.**  
-  Do not miss, repeat, or fragment important details.
-  
-  Document: "${filename}"  
-  Content Length: ${text.length} characters  
-  Chunking Strategy: ${strategy.name}  
-  Document Structure: ${analysis.documentStructure}  
-  Max Chunk Size: ${strategy.maxChunkSize} characters  
-  Min Chunk Size: ${strategy.minChunkSize} characters  
-  
-  CRITICAL REQUIREMENTS:
-  - Capture EVERY important fact, number, price, specification, measurement, and policy—**no losses**
-  - Group closely-related information into a single chunk when possible (avoid single-line or sparse chunks)
-  - Merge very small, related sections to avoid information being split across multiple, sparse chunks
-  - Add **references/tags** in the metadata if information is closely linked to another chunk (optional: 'relatedChunks' field)
-  - Avoid redundancy between chunks—each detail should appear in only one chunk unless absolutely necessary for context
-  - Assign MEANINGFUL, user-intent focused titles and clear, concise summaries to each chunk
-  - Assign importance (1-10) reflecting the value and retrieval relevance of chunk information
-  
-  ADDITIONAL ENRICHMENTS:
-  - Include a 'keyTopics' array and a 'chunkType' field for each chunk as metadata
-  - If applicable, add a 'lastUpdated' timestamp and any relevant advanced metadata structure (e.g., tags, entities)
-  - Each chunk should have unique and clear key topics for precise filtering
-  - For product docs, explicitly identify and organize chunks for: variants, sizes, colors, pricing, features, use cases, care/policy, specs, and benefits
-  
-  QUALITY ASSURANCE:
-  - Every numerical value, technical measurement, or specification is present and correct
-  - No key information is omitted, repeated unnecessarily, or split across single-line chunks
-  - All content is grouped logically by function or topic, never arbitrarily
-  - No duplicate or overlapping information between chunks (except where context requires)
-  
-  Respond in the following strict JSON format:
-  
-  {
-    "documentType": "product" | "invoice" | "manual" | "technical" | "general",
-    "documentSummary": "Brief but complete summary (max 2 lines) of the entire document",
-    "chunks": [
-      {
-        "content": "Chunk content (${strategy.minChunkSize}-${strategy.maxChunkSize} chars), covering a related set of information in detail",
-        "title": "Clear, specific title for this chunk",
-        "summary": "2-3 sentences summarizing what the chunk includes",
-        "keyTopics": ["primary topic", "secondary topic", ...],
-        "importance": 1-10,
-        "chunkType": "introduction" | "specification" | "features" | "pricing" | "policies" | "use_cases" | "benefits" | "technical" | "general",
-        "lastUpdated": "YYYY-MM-DD", // optional
-        "relatedChunks": [chunkIndex1, chunkIndex2] // optional
-      }
-    ]
-  }
-  
-  Document Analysis:
-  ${analysis.likelyOCRIssues ? '- Possible OCR issues—check for garbled text' : '- Text is clean'}
-  ${keyInfoPatterns.length > 0 ? `- Key patterns found:\n${keyInfoPatterns.map(info => `  • ${info}`).join('\n')}` : '- No specific patterns detected'}
-  
-  Document Content:
-  """
-  ${text}
-  """
-  
-  ${adaptiveInstructions}
-  `;
+    return `You are a document chunking specialist. Divide this document into logical, semantically meaningful chunks.
+
+DOCUMENT INFORMATION:
+- Filename: "${filename}"
+- Content Length: ${text.length} characters
+- Target Chunk Size: ${strategy.minChunkSize}-${strategy.maxChunkSize} characters
+
+YOUR TASK:
+Analyze the document and create chunks that:
+1. Preserve natural section boundaries (headings, topics, content type changes)
+2. Keep related information together
+3. Are self-contained and meaningful when read independently
+4. Contain ONLY text that exists verbatim in the source document
+
+CRITICAL REQUIREMENTS:
+✓ Copy exact text - do not paraphrase or rewrite
+✓ Capture EVERY detail: prices, measurements, specifications, names, dates
+✓ Group related information logically
+✓ Maintain proper context and flow
+✓ Do not split tables, lists, or related data
+✓ Do not invent or infer information
+
+CONTENT TO CAPTURE:
+- All numerical data (prices, measurements, quantities)
+- Technical specifications and details
+- Product names and model numbers
+- Policies, warranties, and terms
+- Contact information and links
+- Headers, titles, and section markers
+
+OUTPUT FORMAT (valid JSON only):
+{
+  "documentType": "product|manual|technical|general|handbook|guide",
+  "documentSummary": "Brief one-sentence summary of the entire document",
+  "chunks": [
+    {
+      "content": "EXACT verbatim text from the document (${strategy.minChunkSize}-${strategy.maxChunkSize} chars)",
+      "title": "Clear, descriptive title for this section",
+      "summary": "2-3 sentence summary of what this chunk contains",
+      "keyTopics": ["primary topic", "secondary topic", "tertiary topic"],
+      "importance": 1-10 (10 = critical information like pricing/specs),
+      "chunkType": "introduction|specification|features|pricing|policies|technical|general"
+    }
+  ]
+}
+
+QUALITY CHECKS:
+- Every chunk content must be extractable from source document
+- No invented or inferred information
+- All numbers, prices, and names must be exact
+- Complete thoughts and logical groupings
+- No orphaned or incomplete information
+
+SOURCE DOCUMENT:
+"""
+${text}
+"""
+
+Remember: EXTRACT ONLY. Do not create, infer, summarize, or rephrase. Copy the exact text.`;
   }
 
-  private buildAdaptiveInstructions(analysis: any, isProductDoc: boolean, keyInfo: string[]): string {
-    let instructions = '';
-    
-    if (isProductDoc) {
-      instructions += `
-PRODUCT DOCUMENT - You MUST capture:
-- ALL pricing information (MRP, discounts, offers, costs, fees)
-- Complete product specifications and features
-- Exact measurements and technical details
-- Material composition and construction details
-- Warranty, return, and exchange policies
-- Use cases and target applications
-- Benefits and unique selling points
-- Color variants and model information
-- Any certifications or standards mentioned
-- Brand and manufacturer information`;
-    } else if (analysis.documentStructure === 'invoice') {
-      instructions += `
-INVOICE/BILLING DOCUMENT - You MUST capture:
-- All line items with quantities and prices
-- Subtotals, taxes, and grand totals
-- Payment terms and due dates
-- Billing and shipping addresses
-- Invoice numbers and dates
-- Vendor/customer information
-- Discount and promotion details`;
-    } else if (analysis.documentStructure === 'manual') {
-      instructions += `
-MANUAL/INSTRUCTION DOCUMENT - You MUST capture:
-- Step-by-step procedures and instructions
-- Safety warnings and precautions
-- Technical specifications and requirements
-- Troubleshooting information
-- Parts lists and diagrams references
-- Contact information for support`;
-    } else {
-      instructions += `
-GENERAL DOCUMENT - Ensure you capture:
-- All numerical data and measurements
-- Key processes and procedures
-- Important policies and guidelines
-- Technical specifications
-- Contact information and references
-- Any structured information (tables, lists)
-- Dates and deadlines`;
-    }
-    
-    // Add specific instructions based on detected patterns
-    if (keyInfo.some(info => info.includes('Pricing'))) {
-      instructions += `
-- SPECIAL ATTENTION: Pricing information detected - ensure all prices are captured accurately`;
-    }
-    
-    if (keyInfo.some(info => info.includes('Measurement'))) {
-      instructions += `
-- SPECIAL ATTENTION: Measurements detected - capture all dimensions, weights, and specifications`;
-    }
-    
-    if (analysis.likelyOCRIssues) {
-      instructions += `
-- NOTE: Text may have OCR spacing issues - interpret spaced numbers correctly`;
-    }
-    
-    return instructions;
-  }
-
-  private validateAndCleanAIResult(result: AIChunkingResult, strategy: ChunkingStrategy, originalText: string): AIChunkingResult {
-    // Ensure we have valid chunks
+  private validateAndCleanAIResult(
+    result: AIChunkingResult, 
+    strategy: ChunkingStrategy, 
+    originalText: string
+  ): AIChunkingResult {
     if (!result.chunks || result.chunks.length === 0) {
       throw new Error("No chunks returned from AI");
     }
 
-    // Extract key information from original text for validation
-    const keyInfo = this.extractKeyInformation(originalText);
-    
-    // Filter and clean chunks
-    const validChunks = result.chunks
-      .filter(chunk => {
-        const isValidLength = chunk.content.length >= strategy.minChunkSize / 3 && 
-                             chunk.content.length <= strategy.maxChunkSize * 2;
-        const hasContent = chunk.content.trim().length > 30;
-        return isValidLength && hasContent;
-      })
-      .map(chunk => ({
+    console.log(`      🔍 Validating ${result.chunks.length} chunks...`);
+    const validChunks = [];
+    const lowerOriginal = originalText.toLowerCase();
+    const rejectedChunks = [];
+
+    for (let i = 0; i < result.chunks.length; i++) {
+      const chunk = result.chunks[i];
+      
+      // CRITICAL: Verify chunk content actually exists in original document
+      // Take samples from beginning, middle, and end of chunk
+      const chunkContent = chunk.content.toLowerCase().trim();
+      const chunkLength = chunk.content.length;
+      
+      // Sample from different positions
+      const startSample = chunkContent.substring(0, Math.min(80, chunkLength)).trim();
+      const midSample = chunkLength > 200 
+        ? chunkContent.substring(Math.floor(chunkLength / 2) - 40, Math.floor(chunkLength / 2) + 40).trim()
+        : '';
+      const endSample = chunkLength > 100 
+        ? chunkContent.substring(Math.max(0, chunkLength - 80)).trim()
+        : '';
+
+      // Check if samples exist in original
+      const startExists = startSample.length > 20 && lowerOriginal.includes(startSample.substring(0, 50));
+      const midExists = midSample.length > 20 ? lowerOriginal.includes(midSample.substring(0, 40)) : true;
+      const endExists = endSample.length > 20 && lowerOriginal.includes(endSample.substring(Math.max(0, endSample.length - 50)));
+
+      // Chunk is valid if at least 2 out of 3 samples exist
+      const validationScore = [startExists, midExists, endExists].filter(Boolean).length;
+      const isValid = validationScore >= 2;
+
+      if (!isValid) {
+        console.warn(`      ⚠️  HALLUCINATION DETECTED in Chunk ${i + 1}:`);
+        console.warn(`         Title: "${chunk.title}"`);
+        console.warn(`         Start sample found: ${startExists}`);
+        console.warn(`         Mid sample found: ${midExists}`);
+        console.warn(`         End sample found: ${endExists}`);
+        console.warn(`         Preview: "${chunk.content.substring(0, 100)}..."`);
+        console.warn(`         ❌ REJECTING this chunk`);
+        
+        rejectedChunks.push({
+          index: i + 1,
+          title: chunk.title,
+          reason: 'Content not found in original document'
+        });
+        continue;
+      }
+
+      // Additional validation
+      const isValidLength = chunk.content.length >= strategy.minChunkSize / 3;
+      const hasContent = chunk.content.trim().length > 50;
+
+      if (!isValidLength) {
+        console.warn(`      ⚠️  Chunk ${i + 1} too short (${chunk.content.length} chars), skipping`);
+        rejectedChunks.push({
+          index: i + 1,
+          title: chunk.title,
+          reason: `Too short (${chunk.content.length} chars)`
+        });
+        continue;
+      }
+
+      if (!hasContent) {
+        console.warn(`      ⚠️  Chunk ${i + 1} has insufficient content, skipping`);
+        rejectedChunks.push({
+          index: i + 1,
+          title: chunk.title,
+          reason: 'Insufficient content'
+        });
+        continue;
+      }
+
+      // Chunk passed validation
+      validChunks.push({
         ...chunk,
         content: chunk.content.trim(),
         title: chunk.title || 'Untitled Section',
@@ -466,118 +532,97 @@ GENERAL DOCUMENT - Ensure you capture:
         keyTopics: chunk.keyTopics || [],
         importance: Math.max(1, Math.min(10, chunk.importance || 5)),
         chunkType: chunk.chunkType || 'general' as const
-      }));
-
-    if (validChunks.length === 0) {
-      throw new Error("No valid chunks after filtering");
+      });
     }
 
-    // Validate that critical information is captured
-    const allChunkContent = validChunks.map(c => c.content).join(' ').toLowerCase();
-    const missingCriticalInfo = this.findMissingCriticalInfo(originalText, allChunkContent, keyInfo);
+    if (validChunks.length === 0) {
+      console.error(`      ❌ All chunks failed validation!`);
+      throw new Error("No valid chunks after hallucination detection");
+    }
+
+    console.log(`      ✅ Validated ${validChunks.length} chunks (${rejectedChunks.length} rejected)`);
     
-    if (missingCriticalInfo.length > 0) {
-      console.warn('Missing critical information detected:', missingCriticalInfo);
-      
-      // Try to add a supplementary chunk with missing info
-      const missingInfoChunk = this.createSupplementaryChunk(originalText, missingCriticalInfo);
-      if (missingInfoChunk) {
-        validChunks.push(missingInfoChunk);
-      }
+    if (rejectedChunks.length > 0) {
+      console.log(`      📋 Rejected chunks summary:`);
+      rejectedChunks.forEach(r => {
+        console.log(`         - Chunk ${r.index}: "${r.title}" - ${r.reason}`);
+      });
+    }
+
+    // Verify coverage - ensure we didn't lose too much content
+    const totalChunkLength = validChunks.reduce((sum, c) => sum + c.content.length, 0);
+    const coverageRatio = totalChunkLength / originalText.length;
+
+    console.log(`      📊 Coverage analysis:`);
+    console.log(`         Original text: ${originalText.length} chars`);
+    console.log(`         Chunked text: ${totalChunkLength} chars`);
+    console.log(`         Coverage ratio: ${(coverageRatio * 100).toFixed(1)}%`);
+
+    if (coverageRatio < 0.6) {
+      console.warn(`      ⚠️  LOW COVERAGE WARNING: Only ${(coverageRatio * 100).toFixed(1)}% of content captured`);
+      console.warn(`      Consider using fallback chunking or reviewing the AI output`);
+    } else if (coverageRatio < 0.8) {
+      console.warn(`      ⚠️  Moderate coverage: ${(coverageRatio * 100).toFixed(1)}% of content captured`);
+    } else {
+      console.log(`      ✅ Good coverage: ${(coverageRatio * 100).toFixed(1)}% of content captured`);
     }
 
     return {
       ...result,
       chunks: validChunks,
-      documentSummary: result.documentSummary || 'Document summary not available',
+      documentSummary: result.documentSummary || 'Document processed successfully',
       documentType: result.documentType || 'general'
     };
   }
 
-  private createFallbackChunks(text: string, filename: string, strategy: ChunkingStrategy): AIChunkingResult {
-    console.log("Using basic fallback chunking method");
-    
-    // Simple but effective fallback
-    const chunks = [];
-    const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 20);
-    
-    let currentChunk = '';
-    let chunkIndex = 0;
-    
-    for (const sentence of sentences) {
-      const potentialChunk = currentChunk + (currentChunk ? ' ' : '') + sentence;
-      
-      if (potentialChunk.length > strategy.maxChunkSize && currentChunk.length > strategy.minChunkSize) {
-        chunks.push({
-          content: currentChunk.trim(),
-          title: `Section ${chunkIndex + 1}`,
-          summary: `Content from section ${chunkIndex + 1}`,
-          keyTopics: this.extractSimpleTopics(currentChunk),
-          importance: 5,
-          chunkType: 'general' as const
-        });
-        
-        currentChunk = sentence;
-        chunkIndex++;
-      } else {
-        currentChunk = potentialChunk;
-      }
-    }
-    
-    // Add final chunk
-    if (currentChunk.trim() && currentChunk.length > strategy.minChunkSize / 2) {
-      chunks.push({
-        content: currentChunk.trim(),
-        title: `Section ${chunkIndex + 1}`,
-        summary: `Content from section ${chunkIndex + 1}`,
-        keyTopics: this.extractSimpleTopics(currentChunk),
-        importance: 5,
-        chunkType: 'general' as const
-      });
-    }
-
-    return {
-      documentType: 'general',
-      documentSummary: 'Document processed with fallback method',
-      chunks
-    };
-  }
-
-  private createEnhancedFallbackChunks(text: string, filename: string, strategy: ChunkingStrategy): AIChunkingResult {
-    console.log("Using enhanced fallback chunking method");
+  private createEnhancedFallbackChunks(
+    text: string, 
+    filename: string, 
+    strategy: ChunkingStrategy
+  ): AIChunkingResult {
+    console.log(`   📦 Using enhanced fallback chunking method`);
+    console.log(`   🎯 Strategy: Preserve ALL content with smart boundaries`);
     
     // Generate a proper document summary
     const documentSummary = this.generateDocumentSummary(text, filename);
     const documentType = this.determineDocumentType(text);
     
-    // Extract key information for better chunking
-    const keyInfo = this.extractKeyInformation(text);
+    console.log(`   📋 Document type: ${documentType}`);
+    console.log(`   📝 Document summary: ${documentSummary.substring(0, 100)}...`);
     
-    // Create chunks with better logic
     const chunks = [];
-    const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 20);
+    
+    // Split by double newlines first (paragraph boundaries)
+    const paragraphs = text.split(/\n\n+/).filter(p => p.trim().length > 30);
+    console.log(`   📄 Found ${paragraphs.length} paragraphs`);
     
     let currentChunk = '';
     let chunkIndex = 0;
     
-    for (const sentence of sentences) {
-      const potentialChunk = currentChunk + (currentChunk ? ' ' : '') + sentence;
+    for (let i = 0; i < paragraphs.length; i++) {
+      const paragraph = paragraphs[i];
+      const potentialChunk = currentChunk + (currentChunk ? '\n\n' : '') + paragraph;
       
-      if (potentialChunk.length > strategy.maxChunkSize && currentChunk.length > strategy.minChunkSize) {
+      // Check if adding this paragraph would exceed max size
+      if (potentialChunk.length > strategy.maxChunkSize && currentChunk.length >= strategy.minChunkSize) {
+        // Save current chunk
         const chunkTitle = this.generateChunkTitle(currentChunk, chunkIndex + 1);
         const chunkSummary = this.generateChunkSummary(currentChunk);
         const chunkType = this.determineChunkType(currentChunk);
+        const keyTopics = this.extractSimpleTopics(currentChunk);
         
         chunks.push({
           content: currentChunk.trim(),
           title: chunkTitle,
           summary: chunkSummary,
-          keyTopics: this.extractSimpleTopics(currentChunk),
-          importance: this.calculateChunkImportance(currentChunk, keyInfo),
+          keyTopics: keyTopics,
+          importance: this.calculateChunkImportance(currentChunk, keyTopics),
           chunkType: chunkType
         });
         
-        currentChunk = sentence;
+        console.log(`   ✓ Chunk ${chunkIndex + 1}: "${chunkTitle}" (${currentChunk.length} chars)`);
+        
+        currentChunk = paragraph;
         chunkIndex++;
       } else {
         currentChunk = potentialChunk;
@@ -585,20 +630,29 @@ GENERAL DOCUMENT - Ensure you capture:
     }
     
     // Add final chunk
-    if (currentChunk.trim() && currentChunk.length > strategy.minChunkSize / 2) {
+    if (currentChunk.trim().length >= strategy.minChunkSize / 2) {
       const chunkTitle = this.generateChunkTitle(currentChunk, chunkIndex + 1);
       const chunkSummary = this.generateChunkSummary(currentChunk);
       const chunkType = this.determineChunkType(currentChunk);
+      const keyTopics = this.extractSimpleTopics(currentChunk);
       
       chunks.push({
         content: currentChunk.trim(),
         title: chunkTitle,
         summary: chunkSummary,
-        keyTopics: this.extractSimpleTopics(currentChunk),
-        importance: this.calculateChunkImportance(currentChunk, keyInfo),
+        keyTopics: keyTopics,
+        importance: this.calculateChunkImportance(currentChunk, keyTopics),
         chunkType: chunkType
       });
+      
+      console.log(`   ✓ Chunk ${chunkIndex + 1}: "${chunkTitle}" (${currentChunk.length} chars)`);
     }
+
+    // Verify coverage
+    const totalLength = chunks.reduce((sum, c) => sum + c.content.length, 0);
+    const coverage = (totalLength / text.length) * 100;
+    console.log(`   📊 Fallback chunking coverage: ${coverage.toFixed(1)}%`);
+    console.log(`   ✅ Created ${chunks.length} chunks`);
 
     return {
       documentType,
@@ -607,343 +661,19 @@ GENERAL DOCUMENT - Ensure you capture:
     };
   }
 
-  private extractKeyInformation(text: string): string[] {
-    const keyInfo: string[] = [];
-    
-    // Use adaptive extraction based on document analysis
-    const analysis = this.analyzeTextStructure(text);
-    
-    // Extract pricing information adaptively
-    const pricingInfo = this.extractPricingInformation(text, analysis);
-    keyInfo.push(...pricingInfo);
-    
-    // Extract measurements adaptively
-    const measurementInfo = this.extractMeasurementInformation(text);
-    keyInfo.push(...measurementInfo);
-    
-    // Extract model/product codes
-    const modelInfo = this.extractModelInformation(text);
-    keyInfo.push(...modelInfo);
-    
-    // Extract other key information
-    const otherInfo = this.extractOtherKeyInformation(text);
-    keyInfo.push(...otherInfo);
-    
-    return [...new Set(keyInfo)]; // Remove duplicates
-  }
-
-  private extractPricingInformation(text: string, analysis: any): string[] {
-    const pricingInfo: string[] = [];
-    
-    // Universal pricing patterns that work across different formats
-    const universalPatterns = [
-      // Currency symbols followed by numbers
-      /(?:₹|rs\.?|inr|usd|\$|€|£)\s*(\d{1,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-      // Price/cost keywords followed by numbers
-      /(?:price|cost|mrp|rate|amount|fee|charge|total)[\s:=\-]*(?:₹|rs\.?|\$)?\s*(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-      // Numbers followed by currency words
-      /(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)\s*(?:rupees?|dollars?|euros?|pounds?|only|each)/gi,
-      // In pricing/cost sections, find significant numbers
-      /(?:pricing|cost|price|charges?)[\s\S]{0,150}?(\d{2,6}(?:,\d{3})*)/gi
-    ];
-
-    // Document-specific patterns based on structure
-    if (analysis.documentStructure === 'product') {
-      universalPatterns.push(
-        // Product name - price patterns
-        /(?:^|\n)[^\n]*(?:product|item|model)[\s\S]{0,100}?(\d{3,6})/gi,
-        // Table-like structures with prices
-        /(?:^|\n)[^\n]*[\-\s]+(\d{3,6})[\s]*(?:\n|$)/gi
-      );
-    } else if (analysis.documentStructure === 'invoice') {
-      universalPatterns.push(
-        // Invoice total patterns
-        /(?:total|subtotal|grand total|amount due)[\s:=\-]*(\d{2,6}(?:,\d{3})*(?:\.\d{2})?)/gi,
-        // Line item patterns
-        /(?:^|\n)[^\n]*\s+(\d{1,6}(?:,\d{3})*(?:\.\d{2})?)\s*(?:\n|$)/gi
-      );
-    }
-
-    for (const pattern of universalPatterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          // Extract the actual number from the match
-          const numberMatch = match.match(/\d{1,6}(?:,\d{3})*(?:\.\d{2})?/);
-          if (numberMatch) {
-            const number = numberMatch[0];
-            // Filter out obviously wrong numbers (like phone numbers, years, etc.)
-            if (this.isLikelyPriceNumber(number, match)) {
-              pricingInfo.push(`Pricing found: ${number}`);
-            }
-          }
-        });
-      }
-    }
-
-    return pricingInfo;
-  }
-
-  private isLikelyPriceNumber(number: string, context: string): boolean {
-    const numValue = parseFloat(number.replace(/,/g, ''));
-    const lowerContext = context.toLowerCase();
-    
-    // Too small to be a meaningful price (unless it's cents)
-    if (numValue < 1 && !lowerContext.includes('cent')) return false;
-    
-    // Too large to be a reasonable price
-    if (numValue > 10000000) return false;
-    
-    // Looks like a year
-    if (numValue >= 1900 && numValue <= 2030 && number.length === 4) return false;
-    
-    // Looks like a phone number
-    if (number.length >= 10 && /^\d+$/.test(number.replace(/[,\s]/g, ''))) return false;
-    
-    // Has good pricing context
-    if (lowerContext.includes('price') || lowerContext.includes('cost') || 
-        lowerContext.includes('₹') || lowerContext.includes('rs') ||
-        lowerContext.includes('$') || lowerContext.includes('total')) {
-      return true;
-    }
-    
-    // Reasonable price range
-    return numValue >= 10 && numValue <= 1000000;
-  }
-
-  private extractMeasurementInformation(text: string): string[] {
-    const measurementInfo: string[] = [];
-    
-    const measurementPatterns = [
-      // Physical dimensions
-      /(\d+(?:\.\d+)?)\s*(?:x|×)\s*(\d+(?:\.\d+)?)\s*(?:x|×)?\s*(\d+(?:\.\d+)?)?\s*(?:cm|mm|m|inch|in|ft|feet)/gi,
-      /(?:dimensions?|size|length|width|height)[\s:=\-]*(\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)*)\s*(?:cm|mm|m|inch|in|ft|feet)/gi,
-      // Weight measurements
-      /(?:weight|mass)[\s:=\-]*(\d+(?:\.\d+)?)\s*(?:kg|g|grams?|pounds?|lbs?|oz)/gi,
-      /(\d+(?:\.\d+)?)\s*(?:kg|g|grams?|pounds?|lbs?|oz)/gi,
-      // Volume/capacity
-      /(?:capacity|volume)[\s:=\-]*(\d+(?:\.\d+)?)\s*(?:l|liters?|ml|gallons?|cups?)/gi,
-      // Power/electrical
-      /(\d+(?:\.\d+)?)\s*(?:w|watts?|v|volts?|a|amps?|hz|hertz)/gi
-    ];
-    
-    for (const pattern of measurementPatterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          measurementInfo.push(`Measurement found: ${match.trim()}`);
-        });
-      }
-    }
-    
-    return measurementInfo;
-  }
-
-  private extractModelInformation(text: string): string[] {
-    const modelInfo: string[] = [];
-    
-    const modelPatterns = [
-      // Model numbers/codes
-      /(?:model|sku|part\s+(?:no|number)|item\s+(?:no|number)|product\s+code)[\s:=\-]*([A-Z0-9\-_]{3,20})/gi,
-      // General alphanumeric codes
-      /\b([A-Z]{2,}-[A-Z0-9\-]{3,})\b/g,
-      /\b([A-Z]{3,}\d{2,})\b/g
-    ];
-    
-    for (const pattern of modelPatterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          modelInfo.push(`Model/SKU found: ${match.trim()}`);
-        });
-      }
-    }
-    
-    return modelInfo;
-  }
-
-  private extractOtherKeyInformation(text: string): string[] {
-    const otherInfo: string[] = [];
-    
-    // Warranty/policy information
-    const policyPatterns = [
-      /(?:warranty|guarantee)[\s:=\-]*(\d+\s*(?:year|month|day)s?)/gi,
-      /(?:return|exchange|refund)\s+policy/gi
-    ];
-    
-    // Material information
-    const materialPatterns = [
-      /(?:material|made\s+(?:of|from)|fabric)[\s:=\-]*([a-z\s,]{5,50})/gi
-    ];
-    
-    // Color/variant information
-    const variantPatterns = [
-      /(?:color|colour|variant|available\s+in)s?[\s:=\-]*([a-z\s,]{5,100})/gi
-    ];
-    
-    const allPatterns = [...policyPatterns, ...materialPatterns, ...variantPatterns];
-    
-    for (const pattern of allPatterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          if (match.length < 150) { // Avoid capturing too much
-            otherInfo.push(`Additional info found: ${match.trim()}`);
-          }
-        });
-      }
-    }
-    
-    return otherInfo;
-  }
-
-  private findMissingCriticalInfo(originalText: string, chunkContent: string, keyInfo: string[]): string[] {
-    const missing: string[] = [];
-    
-    // Check if pricing information is missing
-    const pricingInfo = keyInfo.filter(info => info.includes('Pricing found'));
-    if (pricingInfo.length > 0) {
-      const hasPricing = pricingInfo.some(info => {
-        const priceMatch = info.match(/\d+/);
-        return priceMatch && chunkContent.includes(priceMatch[0]);
-      });
-      
-      if (!hasPricing) {
-        missing.push('pricing information');
-      }
-    }
-    
-    // Check for specific important numbers that might be missing
-    const importantNumbers = originalText.match(/\b\d{3,5}\b/g) || [];
-    const missingNumbers = importantNumbers.filter(num => 
-      !chunkContent.includes(num) && 
-      parseInt(num) > 99 // Focus on significant numbers
-    );
-    
-    if (missingNumbers.length > 0) {
-      missing.push(`important numbers: ${missingNumbers.slice(0, 3).join(', ')}`);
-    }
-    
-    // Check for measurement information
-    const measurementInfo = keyInfo.filter(info => info.includes('Measurement found'));
-    if (measurementInfo.length > 0) {
-      const hasMeasurements = measurementInfo.some(info => {
-        const measurement = info.replace('Measurement found: ', '');
-        return chunkContent.includes(measurement.toLowerCase());
-      });
-      
-      if (!hasMeasurements) {
-        missing.push('measurement specifications');
-      }
-    }
-    
-    // Check for model/SKU information
-    const modelInfo = keyInfo.filter(info => info.includes('Model/SKU found'));
-    if (modelInfo.length > 0) {
-      const hasModel = modelInfo.some(info => {
-        const model = info.replace('Model/SKU found: ', '');
-        return chunkContent.includes(model.toLowerCase());
-      });
-      
-      if (!hasModel) {
-        missing.push('model/SKU information');
-      }
-    }
-    
-    return missing;
-  }
-
-  private createSupplementaryChunk(originalText: string, missingInfo: string[]): any | null {
-    if (missingInfo.length === 0) return null;
-    
-    // Extract relevant sections that contain the missing information
-    const relevantSections: string[] = [];
-    
-    // Look for pricing sections
-    if (missingInfo.some(info => info.includes('pricing'))) {
-      const pricingSections = this.extractSectionsWithPattern(originalText, [
-        /pricing[\s\S]{0,200}/gi,
-        /price[\s\S]{0,100}/gi,
-        /\b\d{3,5}\b[\s\S]{0,50}/g,
-        /₹[\s\S]{0,50}/g,
-        /rs\.?[\s\S]{0,50}/gi
-      ]);
-      relevantSections.push(...pricingSections);
-    }
-    
-    // Look for measurement sections
-    if (missingInfo.some(info => info.includes('measurement'))) {
-      const measurementSections = this.extractSectionsWithPattern(originalText, [
-        /dimensions?[\s\S]{0,200}/gi,
-        /size[\s\S]{0,100}/gi,
-        /weight[\s\S]{0,100}/gi,
-        /\d+\s*(?:cm|mm|kg|g|inch)[\s\S]{0,100}/gi
-      ]);
-      relevantSections.push(...measurementSections);
-    }
-    
-    // Look for important numbers
-    if (missingInfo.some(info => info.includes('numbers'))) {
-      const numberSections = this.extractSectionsWithPattern(originalText, [
-        /\b\d{3,5}\b[\s\S]{0,100}/g
-      ]);
-      relevantSections.push(...numberSections);
-    }
-    
-    if (relevantSections.length === 0) return null;
-    
-    const supplementaryContent = [...new Set(relevantSections)]
-      .join(' ')
-      .trim()
-      .substring(0, 800); // Limit length
-    
-    if (supplementaryContent.length < 50) return null;
-    
-    return {
-      content: supplementaryContent,
-      title: 'Additional Important Information',
-      summary: `Contains missing critical information: ${missingInfo.join(', ')}`,
-      keyTopics: ['supplementary', 'critical-info'],
-      importance: 9,
-      chunkType: 'technical' as const
-    };
-  }
-
-  private extractSectionsWithPattern(text: string, patterns: RegExp[]): string[] {
-    const sections: string[] = [];
-    
-    for (const pattern of patterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        sections.push(...matches.map(match => match.trim()));
-      }
-    }
-    
-    return sections.filter(section => section.length > 20);
-  }
-
   private generateDocumentSummary(text: string, filename: string): string {
-    // Extract first few sentences for a basic summary
-    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
-    const firstSentences = sentences.slice(0, 3).join('.').trim();
+    // Extract first few meaningful sentences
+    const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 15);
+    const firstSentences = sentences.slice(0, 2).join('. ').trim() + '.';
     
-    // Identify document type and key information
+    // Identify document type
     const isProduct = this.isProductDocument(text);
-    const keyInfo = this.extractKeyInformation(text);
     
     if (isProduct) {
       const productName = this.extractProductName(text, filename);
-      const features = keyInfo.filter(info => info.includes('feature')).length;
-      const hasPricing = keyInfo.some(info => info.includes('Pricing'));
-      
-      let summary = `Product documentation for ${productName}. `;
-      if (hasPricing) summary += "Includes pricing information. ";
-      if (features > 0) summary += `Contains ${features} feature details. `;
-      summary += firstSentences.length > 50 ? firstSentences.substring(0, 150) + "..." : firstSentences;
-      
-      return summary;
+      return `Product documentation for ${productName}. ${firstSentences.substring(0, 150)}`;
     } else {
-      return `Document "${filename}" containing ${Math.ceil(text.length / 1000)}k characters. ${firstSentences.substring(0, 200)}${firstSentences.length > 200 ? '...' : ''}`;
+      return `${filename.replace(/\.(pdf|docx?|txt)$/i, '')}: ${firstSentences.substring(0, 200)}`;
     }
   }
 
@@ -951,8 +681,11 @@ GENERAL DOCUMENT - Ensure you capture:
     if (this.isProductDocument(text)) return 'product';
     
     const lowerText = text.toLowerCase();
+    
+    if (lowerText.includes('handbook') || lowerText.includes('guide')) return 'handbook';
     if (lowerText.includes('manual') || lowerText.includes('instruction')) return 'manual';
     if (lowerText.includes('technical') || lowerText.includes('specification')) return 'technical';
+    if (lowerText.includes('invoice') || lowerText.includes('bill')) return 'invoice';
     
     return 'general';
   }
@@ -973,23 +706,39 @@ GENERAL DOCUMENT - Ensure you capture:
     const lowerContent = content.toLowerCase();
     
     // Check for specific content types
-    if (lowerContent.includes('price') || lowerContent.includes('cost') || lowerContent.includes('₹')) {
+    if (lowerContent.includes('price') || lowerContent.includes('cost') || lowerContent.includes('₹') || lowerContent.includes('pricing')) {
       return 'Pricing Information';
     }
-    if (lowerContent.includes('dimension') || lowerContent.includes('size') || lowerContent.includes('weight')) {
+    if (lowerContent.includes('dimension') || lowerContent.includes('size') || lowerContent.includes('weight') || lowerContent.includes('measurement')) {
       return 'Product Specifications';
     }
     if (lowerContent.includes('feature') || lowerContent.includes('benefit')) {
       return 'Features & Benefits';
     }
-    if (lowerContent.includes('material') || lowerContent.includes('fabric')) {
+    if (lowerContent.includes('material') || lowerContent.includes('fabric') || lowerContent.includes('construction')) {
       return 'Material & Construction';
     }
-    if (lowerContent.includes('warranty') || lowerContent.includes('return') || lowerContent.includes('policy')) {
+    if (lowerContent.includes('warranty') || lowerContent.includes('return') || lowerContent.includes('policy') || lowerContent.includes('exchange')) {
       return 'Policies & Warranty';
     }
-    if (lowerContent.includes('use case') || lowerContent.includes('suitable')) {
+    if (lowerContent.includes('use case') || lowerContent.includes('suitable') || lowerContent.includes('application')) {
       return 'Usage & Applications';
+    }
+    if (lowerContent.includes('about') || lowerContent.includes('overview') || lowerContent.includes('introduction')) {
+      return 'Overview';
+    }
+    if (lowerContent.includes('contact') || lowerContent.includes('support') || lowerContent.includes('email') || lowerContent.includes('phone')) {
+      return 'Contact Information';
+    }
+    
+    // Try to extract a title from the first line or heading
+    const lines = content.split('\n').filter(l => l.trim().length > 0);
+    if (lines.length > 0) {
+      const firstLine = lines[0].trim();
+      // If first line is short and looks like a heading
+      if (firstLine.length > 5 && firstLine.length < 80 && !firstLine.endsWith('.')) {
+        return firstLine;
+      }
     }
     
     // Extract first meaningful phrase as title
@@ -1008,10 +757,11 @@ GENERAL DOCUMENT - Ensure you capture:
     const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 10);
     if (sentences.length === 0) return 'Content summary not available';
     
-    const firstSentence = sentences[0].trim();
-    const summary = firstSentence.length > 100 ? 
-      firstSentence.substring(0, 97) + '...' : 
-      firstSentence;
+    // Use first 2 sentences for summary
+    const summaryText = sentences.slice(0, 2).join('. ').trim();
+    const summary = summaryText.length > 150 ? 
+      summaryText.substring(0, 147) + '...' : 
+      summaryText + '.';
       
     return summary || 'Content summary not available';
   }
@@ -1019,74 +769,132 @@ GENERAL DOCUMENT - Ensure you capture:
   private determineChunkType(content: string): 'introduction' | 'specification' | 'features' | 'pricing' | 'policies' | 'technical' | 'general' {
     const lowerContent = content.toLowerCase();
     
-    if (lowerContent.includes('price') || lowerContent.includes('cost') || lowerContent.includes('₹') || lowerContent.includes('mrp')) {
-      return 'pricing';
+    // Score each type
+    const scores = {
+      pricing: 0,
+      specification: 0,
+      features: 0,
+      policies: 0,
+      technical: 0,
+      introduction: 0,
+      general: 0
+    };
+
+    // Pricing indicators
+    if (lowerContent.includes('price') || lowerContent.includes('cost') || 
+        lowerContent.includes('₹') || lowerContent.includes('rs') || 
+        lowerContent.includes('mrp') || lowerContent.includes('discount')) {
+      scores.pricing += 3;
     }
-    if (lowerContent.includes('dimension') || lowerContent.includes('specification') || lowerContent.includes('technical')) {
-      return 'specification';
+
+    // Specification indicators
+    if (lowerContent.includes('dimension') || lowerContent.includes('specification') || 
+        lowerContent.includes('weight') || lowerContent.includes('size') ||
+        lowerContent.includes('measurement')) {
+      scores.specification += 3;
     }
-    if (lowerContent.includes('feature') || lowerContent.includes('benefit') || lowerContent.includes('advantage')) {
-      return 'features';
+
+    // Features indicators
+    if (lowerContent.includes('feature') || lowerContent.includes('benefit') || 
+        lowerContent.includes('advantage') || lowerContent.includes('capability')) {
+      scores.features += 3;
     }
-    if (lowerContent.includes('warranty') || lowerContent.includes('return') || lowerContent.includes('policy') || lowerContent.includes('exchange')) {
-      return 'policies';
+
+    // Policies indicators
+    if (lowerContent.includes('warranty') || lowerContent.includes('return') || 
+        lowerContent.includes('policy') || lowerContent.includes('exchange') ||
+        lowerContent.includes('guarantee')) {
+      scores.policies += 3;
     }
-    if (lowerContent.includes('material') || lowerContent.includes('technical') || lowerContent.includes('construction')) {
-      return 'technical';
+
+    // Technical indicators
+    if (lowerContent.includes('material') || lowerContent.includes('technical') || 
+        lowerContent.includes('construction') || lowerContent.includes('engineering')) {
+      scores.technical += 3;
     }
-    
-    return 'general';
+
+    // Introduction indicators
+    if (lowerContent.includes('about') || lowerContent.includes('overview') || 
+        lowerContent.includes('introduction') || lowerContent.includes('welcome')) {
+      scores.introduction += 3;
+    }
+
+    // Find highest score
+    const maxScore = Math.max(...Object.values(scores));
+    if (maxScore === 0) return 'general';
+
+    const type = Object.entries(scores).find(([_, score]) => score === maxScore)?.[0];
+    return (type || 'general') as any;
   }
 
-  private calculateChunkImportance(content: string, keyInfo: string[]): number {
+  private calculateChunkImportance(content: string, keyTopics: string[]): number {
     let importance = 5; // Base importance
     
     const lowerContent = content.toLowerCase();
     
-    // Boost importance for pricing information
-    if (lowerContent.includes('price') || lowerContent.includes('₹') || lowerContent.includes('cost')) {
+    // High importance for pricing
+    if (lowerContent.includes('price') || lowerContent.includes('₹') || 
+        lowerContent.includes('cost') || lowerContent.includes('mrp')) {
       importance += 3;
     }
     
-    // Boost for specifications
-    if (lowerContent.includes('dimension') || lowerContent.includes('weight') || lowerContent.includes('size')) {
+    // High importance for specifications
+    if (lowerContent.includes('dimension') || lowerContent.includes('weight') || 
+        lowerContent.includes('size') || lowerContent.includes('specification')) {
       importance += 2;
     }
     
-    // Boost for features
+    // Medium importance for features
     if (lowerContent.includes('feature') || lowerContent.includes('benefit')) {
       importance += 1;
     }
     
-    // Check if content contains any detected key information
-    const hasKeyInfo = keyInfo.some(info => {
-      const infoText = info.toLowerCase().replace(/^[^:]*:\s*/, '');
-      return lowerContent.includes(infoText);
-    });
+    // Importance based on content density
+    const hasNumbers = /\d+/.test(content);
+    const hasMeasurements = /\d+\s*(?:cm|mm|m|kg|g|inch|ft)/i.test(content);
     
-    if (hasKeyInfo) {
-      importance += 2;
-    }
+    if (hasNumbers) importance += 1;
+    if (hasMeasurements) importance += 1;
     
-    return Math.min(10, importance);
+    // Importance based on key topics
+    if (keyTopics.length >= 3) importance += 1;
+    
+    return Math.min(10, Math.max(1, importance));
   }
 
   private extractSimpleTopics(text: string): string[] {
-    // Simple topic extraction for fallback
-    const words = text.toLowerCase().split(/\s+/);
-    const importantWords = words.filter(word => 
-      word.length > 4 && 
-      !/^(the|and|for|with|that|this|from|they|have|been|were|would|could|should|will|can|may|might)$/.test(word)
-    );
+    // Extract meaningful words (nouns, adjectives, important terms)
+    const words = text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 4); // Only words with 5+ characters
     
-    // Get most frequent words as topics
+    // Common words to exclude
+    const stopWords = new Set([
+      'about', 'above', 'after', 'again', 'against', 'all', 'also', 'and', 'any', 'are',
+      'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by',
+      'can', 'could', 'did', 'do', 'does', 'doing', 'don', 'down', 'during', 'each',
+      'few', 'for', 'from', 'further', 'had', 'has', 'have', 'having', 'here', 'how',
+      'if', 'in', 'into', 'is', 'it', 'its', 'itself', 'just', 'may', 'might', 'more',
+      'most', 'must', 'not', 'now', 'of', 'off', 'on', 'once', 'only', 'or', 'other',
+      'our', 'out', 'over', 'own', 'same', 'should', 'so', 'some', 'such', 'than',
+      'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
+      'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was', 'we', 'were',
+      'what', 'when', 'where', 'which', 'while', 'who', 'will', 'with', 'would', 'you',
+      'your', 'yours', 'yourself', 'yourselves'
+    ]);
+    
+    const importantWords = words.filter(word => !stopWords.has(word));
+    
+    // Count word frequencies
     const wordCount = importantWords.reduce((acc, word) => {
       acc[word] = (acc[word] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
     
+    // Get top 5 most frequent words as topics
     return Object.entries(wordCount)
-      .sort(([,a], [,b]) => b - a)
+      .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
       .map(([word]) => word);
   }
@@ -1095,10 +903,10 @@ GENERAL DOCUMENT - Ensure you capture:
     const lowerText = text.toLowerCase();
     let score = 0;
     
-    // Universal product indicators (work across different formats)
-    const universalIndicators = [
+    // Universal product indicators
+    const indicators = [
       { keywords: ['product', 'item'], weight: 2 },
-      { keywords: ['price', 'cost', 'mrp'], weight: 3 },
+      { keywords: ['price', 'cost', 'mrp', 'pricing'], weight: 3 },
       { keywords: ['features', 'specifications', 'specs'], weight: 2 },
       { keywords: ['dimensions', 'weight', 'size'], weight: 2 },
       { keywords: ['material', 'fabric', 'construction'], weight: 1 },
@@ -1109,26 +917,22 @@ GENERAL DOCUMENT - Ensure you capture:
       { keywords: ['brand', 'manufacturer'], weight: 1 }
     ];
     
-    // Check for universal indicators
-    universalIndicators.forEach(indicator => {
+    // Check indicators
+    indicators.forEach(indicator => {
       if (indicator.keywords.some(keyword => lowerText.includes(keyword))) {
         score += indicator.weight;
       }
     });
     
-    // Check for pricing patterns (strong indicator)
-    const hasPricing = this.detectPricingPatterns(text);
-    if (hasPricing) score += 4;
+    // Check for pricing patterns
+    if (this.detectPricingPatterns(text)) score += 4;
     
-    // Check for measurement patterns (strong indicator)
-    const hasMeasurements = this.detectMeasurementPatterns(text);
-    if (hasMeasurements) score += 3;
+    // Check for measurement patterns
+    if (this.detectMeasurementPatterns(text)) score += 3;
     
-    // Check for product catalog structure (tables, lists)
-    const hasProductStructure = this.detectProductStructure(text);
-    if (hasProductStructure) score += 2;
+    // Check for product structure
+    if (this.detectProductStructure(text)) score += 2;
     
-    // Document is likely a product document if score >= 5
     return score >= 5;
   }
 
@@ -1153,7 +957,6 @@ GENERAL DOCUMENT - Ensure you capture:
   }
 
   private detectProductStructure(text: string): boolean {
-    // Check for table-like structures or product listings
     const structurePatterns = [
       /(?:^|\n)\s*(?:product|item|model)[\s\S]{0,100}?(?:\d+|₹|rs)/gim,
       /(?:^|\n)[^\n]*[\-\|]+[^\n]*\d+/gim,
@@ -1167,7 +970,7 @@ GENERAL DOCUMENT - Ensure you capture:
     return this.isProductDocument(text) ? this.productDocStrategy : this.defaultStrategy;
   }
 
-  // Keep the enhanced text extraction and cleaning methods
+  // TEXT EXTRACTION METHODS
   private async extractText(buffer: Buffer, fileType: string): Promise<ExtractedContent> {
     switch (fileType.toLowerCase()) {
       case 'txt':
@@ -1187,8 +990,10 @@ GENERAL DOCUMENT - Ensure you capture:
       
       case 'pdf':
         try {
-          const text = await this.extractPdfTextEnhanced(buffer);
+          console.log(`   📄 Extracting from PDF...`);
+          const text = await this.extractPdfTextWithVisionFallback(buffer);
           const links = await this.extractLinksFromPdf(buffer);
+          console.log(`   ✅ PDF extraction complete`);
           return { text, links };
         } catch (error) {
           throw new Error(`Failed to extract PDF text: ${(error as Error).message}`);
@@ -1196,8 +1001,10 @@ GENERAL DOCUMENT - Ensure you capture:
       
       case 'docx':
         try {
+          console.log(`   📄 Extracting from DOCX...`);
           const result = await mammoth.extractRawText({ buffer });
           const links = await this.extractLinksFromDocx(buffer);
+          console.log(`   ✅ DOCX extraction complete`);
           return {
             text: result.value,
             links
@@ -1245,6 +1052,7 @@ GENERAL DOCUMENT - Ensure you capture:
                   }
                 }
                 
+                // Sort by position (top to bottom, left to right)
                 textItems.sort((a, b) => {
                   if (Math.abs(a.y - b.y) < 0.5) {
                     return a.x - b.x;
@@ -1271,7 +1079,7 @@ GENERAL DOCUMENT - Ensure you capture:
           text = pageTexts.join('\n\n');
           
           if (text.length < 50) {
-            reject(new Error('PDF text extraction failed - document appears to be empty or corrupted'));
+            reject(new Error('PDF text extraction failed - document appears to be empty or image-based'));
           } else {
             resolve(text);
           }
@@ -1284,109 +1092,244 @@ GENERAL DOCUMENT - Ensure you capture:
     });
   }
 
+  /**
+   * FIXED: Extract text from PDF with vision fallback for image-based PDFs
+   */
+  private async extractPdfTextWithVisionFallback(buffer: Buffer): Promise<string> {
+    try {
+      console.log(`      🔍 Attempting traditional PDF text extraction...`);
+      const traditionalText = await this.extractPdfTextEnhanced(buffer);
+      
+      // Validate quality
+      if (this.validateTextQuality(traditionalText)) {
+        console.log(`      ✅ Traditional extraction successful (${traditionalText.length} chars)`);
+        return traditionalText;
+      }
+      
+      console.log(`      ⚠️  Traditional extraction quality poor, using vision fallback...`);
+      throw new Error("Poor text quality from traditional extraction");
+      
+    } catch (error) {
+      console.log(`      🤖 Using multimodal vision extraction...`);
+      
+      try {
+        const multimodalText = await this.extractTextFromPdfUsingMultimodal(buffer);
+        console.log(`      ✅ Vision extraction successful (${multimodalText.length} chars)`);
+        return multimodalText;
+      } catch (multimodalError) {
+        console.error(`      ❌ Vision extraction failed:`, (multimodalError as Error).message);
+        throw new Error(`Both traditional and vision PDF extraction failed. Traditional: ${(error as Error).message}, Vision: ${(multimodalError as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * FIXED: Convert PDF to images and extract text using GPT-4 Vision
+   */
+  private async extractTextFromPdfUsingMultimodal(buffer: Buffer): Promise<string> {
+    try {
+      console.log(`         📸 Converting PDF pages to images...`);
+      
+      const pngPages = await pdfToPng(buffer, {
+        disableFontFace: false,
+        useSystemFonts: true,
+        enableXfa: false,
+        viewportScale: 2.5,
+        outputFileMaskFunc: (pageNumber: number) => `page_${pageNumber}`,
+        pagesToProcess: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // Process first 10 pages
+        verbosityLevel: 0
+      });
+
+      if (!pngPages || pngPages.length === 0) {
+        throw new Error("Failed to convert PDF to images");
+      }
+
+      console.log(`         ✅ Converted ${pngPages.length} pages to images`);
+
+      const pageResults: string[] = [];
+      
+      for (let i = 0; i < pngPages.length; i++) {
+        const page = pngPages[i];
+        console.log(`         🔍 Processing page ${i + 1}/${pngPages.length}...`);
+        
+        try {
+          const pageText = await this.extractTextFromPageImage(page.content, i + 1);
+          
+          if (pageText && pageText.trim().length > 20) {
+            pageResults.push(`=== PAGE ${i + 1} ===\n${pageText.trim()}`);
+            console.log(`         ✅ Page ${i + 1}: ${pageText.length} chars extracted`);
+          } else {
+            console.warn(`         ⚠️  Page ${i + 1}: Insufficient content (${pageText.length} chars)`);
+          }
+        } catch (pageError) {
+          console.warn(`         ❌ Page ${i + 1} failed:`, (pageError as Error).message);
+        }
+      }
+
+      if (pageResults.length === 0) {
+        throw new Error("No content extracted from any pages");
+      }
+
+      const fullText = pageResults.join('\n\n');
+      console.log(`         ✅ Total extracted: ${fullText.length} characters from ${pageResults.length} pages`);
+      
+      return fullText;
+      
+    } catch (error) {
+      throw new Error(`Multimodal PDF extraction failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * FIXED: Extract text from a single page image using GPT-4 Vision
+   */
+  private async extractTextFromPageImage(imageBuffer: Buffer, pageNumber: number): Promise<string> {
+    const base64Image = imageBuffer.toString('base64');
+    
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Vision extraction timeout')), 60000);
+    });
+    
+    const visionPromise = openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You are a precise OCR transcription tool. Your ONLY job is to extract text from images.
+
+STRICT RULES:
+1. Extract ONLY the actual text visible in the image
+2. Copy text EXACTLY as written - do not paraphrase or summarize
+3. DO NOT describe visual elements, colors, layouts, or designs
+4. DO NOT add commentary like "the image shows" or "this page contains"
+5. DO NOT infer or create information not explicitly written
+6. Maintain original formatting: headings, paragraphs, lists, tables
+7. Fix obvious OCR spacing errors (e.g., "F r i d o" → "Frido")
+8. Preserve all numbers, measurements, and technical data exactly
+9. Include page headers/footers only if they contain actual content
+
+OUTPUT FORMAT:
+Return ONLY the extracted text. No preamble, no analysis, no descriptions.
+Just pure text transcription.
+
+EXAMPLES:
+✓ CORRECT: "FRIDO EXPERIENCE STORE\nBY ARCATRON MOBILITY\n\nYour guide to..."
+✗ WRONG: "The page shows a title 'Frido Experience Store' with yellow branding..."
+✗ WRONG: "This is a handbook cover featuring..."
+
+Remember: TRANSCRIBE ONLY. No descriptions.`
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Extract all text from this page image. Output only the text, nothing else.`
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${base64Image}`,
+                detail: "high"
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 4000,
+      temperature: 0.0
+    });
+
+    const response = await Promise.race([visionPromise, timeoutPromise]);
+    const extractedText = response.choices[0]?.message?.content;
+    
+    if (!extractedText) {
+      throw new Error("No content returned from vision model");
+    }
+
+    // Check for hallucination indicators
+    const lowerText = extractedText.toLowerCase();
+    const hallucinationPhrases = [
+      'the image shows',
+      'the page shows',
+      'this page contains',
+      'there is a',
+      'we can see',
+      'the document displays',
+      'visual elements include',
+      'the layout features',
+      'at the top',
+      'on the left',
+      'on the right'
+    ];
+    
+    const hasHallucination = hallucinationPhrases.some(phrase => lowerText.includes(phrase));
+    
+    if (hasHallucination) {
+      console.warn(`            ⚠️  Possible description detected in page ${pageNumber}, retrying...`);
+      return await this.retryExtractionWithStrictPrompt(imageBuffer, pageNumber);
+    }
+
+    return extractedText.trim();
+  }
+
+  /**
+   * Retry extraction with even stricter prompt
+   */
+  private async retryExtractionWithStrictPrompt(imageBuffer: Buffer, pageNumber: number): Promise<string> {
+    const base64Image = imageBuffer.toString('base64');
+    
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `TEXT TRANSCRIPTION ONLY.
+
+Rules:
+- Copy every word you see
+- No descriptions
+- No analysis
+- No explanations
+- Just the text
+
+Output: Pure text transcription.`
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Transcribe the text from this image. Output format: just the text.`
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${base64Image}`,
+                detail: "high"
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 4000,
+      temperature: 0.0
+    });
+
+    return response.choices[0]?.message?.content?.trim() || '';
+  }
+
   private cleanAndNormalizeText(text: string): string {
     let cleanedText = text;
     
-    // Analyze the text to understand its structure
-    const textAnalysis = this.analyzeTextStructure(text);
-    
-    // Apply adaptive cleaning based on the analysis
-    cleanedText = this.applyAdaptiveCleaning(cleanedText, textAnalysis);
-    
-    // Standard cleaning that works for all documents
+    // Remove excessive whitespace but preserve paragraph breaks
     cleanedText = cleanedText
-      .replace(/\s+/g, ' ')
-      .replace(/\s+([.,!?;:])/g, '$1')
-      .replace(/([.!?])\s*([A-Z])/g, '$1 $2')
-      .replace(/\n\s*\n\s*\n/g, '\n\n')
+      .replace(/[ \t]+/g, ' ') // Multiple spaces/tabs to single space
+      .replace(/\n{3,}/g, '\n\n') // Multiple newlines to double newline
+      .replace(/\n /g, '\n') // Remove space after newline
+      .replace(/ \n/g, '\n') // Remove space before newline
       .trim();
     
-    return cleanedText;
-  }
-
-  private analyzeTextStructure(text: string): any {
-    const analysis = {
-      hasSpacedNumbers: false,
-      hasSpacedLetters: false,
-      spacingPattern: 'none',
-      documentStructure: 'unknown',
-      commonNumberPatterns: [] as string[],
-      likelyOCRIssues: false
-    };
-
-    // Detect spaced numbers (like "1 8 99", "2 0 2 4", etc.)
-    const spacedNumberMatches = text.match(/\b\d(\s+\d){1,4}\b/g);
-    if (spacedNumberMatches && spacedNumberMatches.length > 0) {
-      analysis.hasSpacedNumbers = true;
-      analysis.commonNumberPatterns = spacedNumberMatches;
-      analysis.likelyOCRIssues = true;
-    }
-
-    // Detect spaced letters (like "P r o d u c t")
-    const spacedLetterMatches = text.match(/\b[A-Za-z](\s+[A-Za-z]){2,}\b/g);
-    if (spacedLetterMatches && spacedLetterMatches.length > 2) {
-      analysis.hasSpacedLetters = true;
-      analysis.likelyOCRIssues = true;
-    }
-
-    // Detect document structure
-    if (text.toLowerCase().includes('product') && text.toLowerCase().includes('price')) {
-      analysis.documentStructure = 'product';
-    } else if (text.toLowerCase().includes('invoice') || text.toLowerCase().includes('bill')) {
-      analysis.documentStructure = 'invoice';
-    } else if (text.toLowerCase().includes('manual') || text.toLowerCase().includes('instruction')) {
-      analysis.documentStructure = 'manual';
-    }
-
-    return analysis;
-  }
-
-  private applyAdaptiveCleaning(text: string, analysis: any): string {
-    let cleanedText = text;
-
-    // If we detected spaced numbers, fix them intelligently
-    if (analysis.hasSpacedNumbers) {
-      // Fix 4-digit years (like "2 0 2 4" -> "2024")
-      cleanedText = cleanedText.replace(/\b(19|20)(\s+)(\d)(\s+)(\d)(\s+)(\d)\b/g, '$1$3$5$7');
-      
-      // Fix 3-4 digit prices/numbers (like "1 8 99" -> "1899")
-      cleanedText = cleanedText.replace(/\b(\d)(\s+)(\d)(\s+)(\d+)\b/g, '$1$3$5');
-      
-      // Fix 2-digit numbers (like "1 5" -> "15")
-      cleanedText = cleanedText.replace(/\b(\d)(\s+)(\d)\b/g, (match, d1, space, d2) => {
-        // Only fix if it looks like a meaningful number (not random digits)
-        const context = text.substring(text.indexOf(match) - 20, text.indexOf(match) + 20);
-        if (context.toLowerCase().includes('price') || 
-            context.toLowerCase().includes('cost') || 
-            context.toLowerCase().includes('amount') ||
-            context.includes('₹') || context.includes('rs')) {
-          return d1 + d2;
-        }
-        return match;
-      });
-    }
-
-    // If we detected spaced letters, fix common words
-    if (analysis.hasSpacedLetters) {
-      // Fix common spaced words
-      const commonWords = ['product', 'description', 'specification', 'price', 'features', 'benefits'];
-      commonWords.forEach(word => {
-        const spacedPattern = word.split('').join('\\s+');
-        const regex = new RegExp(`\\b${spacedPattern}\\b`, 'gi');
-        cleanedText = cleanedText.replace(regex, word);
-      });
-      
-      // General spaced letter fixing (more conservative)
-      cleanedText = cleanedText.replace(/\b([A-Za-z])\s+([A-Za-z])\s+([A-Za-z]+)\b/g, (match) => {
-        // Only fix if the result would be a reasonable word length
-        const unspaced = match.replace(/\s+/g, '');
-        if (unspaced.length <= 20) {
-          return unspaced;
-        }
-        return match;
-      });
-    }
-
     return cleanedText;
   }
 
@@ -1396,15 +1339,15 @@ GENERAL DOCUMENT - Ensure you capture:
     const letterCount = (text.match(/[a-zA-Z]/g) || []).length;
     const letterRatio = letterCount / text.length;
     
-    if (letterRatio < 0.6) return false;
+    if (letterRatio < 0.5) return false;
     
     const words = text.split(/\s+/).filter(w => w.length > 0);
     const reasonableWords = words.filter(w => 
       w.length >= 2 && /[a-zA-Z]/.test(w)
     ).length;
     
-    const wordQualityRatio = reasonableWords / words.length;
-    return wordQualityRatio > 0.7;
+    const wordQualityRatio = reasonableWords / Math.max(words.length, 1);
+    return wordQualityRatio > 0.6;
   }
 
   async deleteDocumentFromVector(documentId: string): Promise<void> {
@@ -1412,60 +1355,52 @@ GENERAL DOCUMENT - Ensure you capture:
   }
 
   /**
-   * Generate a semantic title optimized for search and display
+   * Generate semantic title for chunk
    */
   private generateSemanticTitle(content: string, metadata: any): string {
-    // Use existing title from metadata if available and meaningful
     if (metadata.title && metadata.title !== 'Untitled Section' && metadata.title.length > 10) {
       return metadata.title;
     }
 
-    // Extract the most meaningful phrase from content
     const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 10);
     if (sentences.length > 0) {
       const firstSentence = sentences[0].trim();
-      // Create a concise title from first sentence
       if (firstSentence.length <= 80) {
         return firstSentence;
       } else {
-        // Truncate intelligently at word boundary
         const truncated = firstSentence.substring(0, 77);
         const lastSpace = truncated.lastIndexOf(' ');
         return (lastSpace > 40 ? truncated.substring(0, lastSpace) : truncated) + '...';
       }
     }
 
-    // Fallback to chunk type and product name
     const productName = metadata.productName || metadata.filename || 'Product';
     const chunkType = metadata.chunkType || 'Information';
     return `${productName} - ${chunkType.charAt(0).toUpperCase() + chunkType.slice(1)}`;
   }
 
   /**
-   * Extract comprehensive keywords for hybrid search (BM25 + vector)
+   * Extract robust keywords for hybrid search
    */
   private extractRobustKeywords(content: string, metadata: any): string[] {
     const keywords = new Set<string>();
 
-    // 1. Extract from existing keyTopics in metadata
+    // From metadata
     if (metadata.keyTopics && Array.isArray(metadata.keyTopics)) {
       metadata.keyTopics.forEach((topic: string) => keywords.add(topic.toLowerCase()));
     }
 
-    // 2. Extract product-specific keywords from docMetadata
+    // From docMetadata
     if (metadata.docMetadata?.key_entities) {
       const entities = metadata.docMetadata.key_entities;
       
-      // Product name variants
       if (entities.product_name) {
         keywords.add(entities.product_name.toLowerCase());
-        // Add individual words from product name
         entities.product_name.split(/\s+/).forEach((word: string) => {
           if (word.length > 2) keywords.add(word.toLowerCase());
         });
       }
 
-      // Materials
       if (entities.materials) {
         Object.values(entities.materials).forEach((material: any) => {
           if (typeof material === 'string' && material.length > 2) {
@@ -1474,153 +1409,72 @@ GENERAL DOCUMENT - Ensure you capture:
         });
       }
 
-      // Dimensions (extract numbers as keywords)
-      if (entities.dimensions) {
-        keywords.add('dimensions');
-        const dimensionsStr = typeof entities.dimensions === 'string' 
-          ? entities.dimensions 
-          : String(entities.dimensions);
-        const numbers = dimensionsStr.match(/\d+/g);
-        if (numbers) {
-          keywords.add(dimensionsStr.toLowerCase());
-        }
-      }
-
-      // Weight
-      if (entities.weight) {
-        keywords.add('weight');
-      }
-
-      // Pricing
       if (entities.pricing) {
         keywords.add('price');
         keywords.add(`₹${entities.pricing}`);
       }
     }
 
-    // 3. Extract from categories and topics
+    // From categories
     if (metadata.docMetadata?.categories) {
       metadata.docMetadata.categories.forEach((cat: string) => keywords.add(cat.toLowerCase()));
     }
-    if (metadata.docMetadata?.topics) {
-      metadata.docMetadata.topics.forEach((topic: string) => keywords.add(topic.toLowerCase()));
-    }
 
-    // 4. Extract chunk-type specific keywords
+    // From chunk type
     const chunkType = metadata.chunkType;
     if (chunkType) {
       keywords.add(chunkType);
-      
-      // Add related keywords based on chunk type
       const typeKeywords = this.getChunkTypeKeywords(chunkType);
       typeKeywords.forEach(kw => keywords.add(kw));
     }
 
-    // 5. Extract important nouns and phrases from content
+    // From content
     const contentKeywords = this.extractContentKeywords(content);
     contentKeywords.forEach(kw => keywords.add(kw));
 
-    // 6. Add synonyms and related terms for common keywords
-    const expandedKeywords = this.expandKeywordsWithSynonyms(Array.from(keywords));
-    expandedKeywords.forEach(kw => keywords.add(kw));
-
-    // Convert to array and limit to top 20 most relevant
     return Array.from(keywords).slice(0, 20);
   }
 
-  /**
-   * Get related keywords based on chunk type
-   */
   private getChunkTypeKeywords(chunkType: string): string[] {
     const typeKeywordMap: Record<string, string[]> = {
-      'pricing': ['price', 'cost', 'mrp', 'offer', 'discount', 'payment'],
-      'specification': ['specs', 'dimensions', 'weight', 'size', 'technical', 'measurements'],
-      'features': ['benefits', 'features', 'advantages', 'highlights', 'functionality'],
-      'policies': ['warranty', 'return', 'exchange', 'refund', 'guarantee', 'policy'],
-      'use_cases': ['usage', 'application', 'use', 'purpose', 'suitable for'],
-      'benefits': ['advantages', 'benefits', 'features', 'value', 'improvements'],
-      'technical': ['technical', 'specifications', 'details', 'construction', 'design'],
-      'introduction': ['overview', 'summary', 'about', 'introduction', 'description']
+      'pricing': ['price', 'cost', 'mrp', 'offer', 'discount'],
+      'specification': ['specs', 'dimensions', 'weight', 'size', 'technical'],
+      'features': ['benefits', 'features', 'advantages', 'highlights'],
+      'policies': ['warranty', 'return', 'exchange', 'refund', 'guarantee'],
+      'technical': ['technical', 'specifications', 'details', 'construction']
     };
 
     return typeKeywordMap[chunkType] || [];
   }
 
-  /**
-   * Extract important keywords from content text
-   */
   private extractContentKeywords(content: string): string[] {
     const keywords: string[] = [];
     
-    // Extract capitalized words (likely important terms)
+    // Capitalized words
     const capitalizedWords = content.match(/\b[A-Z][a-z]{2,}\b/g) || [];
     capitalizedWords.forEach(word => {
       if (word.length > 3) keywords.push(word.toLowerCase());
     });
 
-    // Extract numbers with units (measurements, prices)
+    // Measurements
     const measurements = content.match(/\d+(?:\.\d+)?\s*(?:cm|mm|m|kg|g|inch|₹|rs)/gi) || [];
     measurements.forEach(m => keywords.push(m.toLowerCase()));
-
-    // Extract quoted phrases
-    const quotes = content.match(/"([^"]+)"/g) || [];
-    quotes.forEach(q => {
-      const cleaned = q.replace(/"/g, '');
-      if (cleaned.length > 3 && cleaned.length < 50) {
-        keywords.push(cleaned.toLowerCase());
-      }
-    });
 
     return keywords;
   }
 
-  /**
-   * Expand keywords with common synonyms for better search coverage
-   */
-  private expandKeywordsWithSynonyms(keywords: string[]): string[] {
-    const synonymMap: Record<string, string[]> = {
-      'pillow': ['cushion'],
-      'leg': ['limb'],
-      'support': ['aid', 'assistance'],
-      'pain': ['ache', 'discomfort'],
-      'comfort': ['ease', 'relaxation'],
-      'ergonomic': ['comfortable', 'supportive'],
-      'circulation': ['blood flow'],
-      'fatigue': ['tiredness', 'exhaustion'],
-      'relief': ['comfort', 'ease']
-    };
-
-    const expanded: string[] = [];
-    keywords.forEach(keyword => {
-      if (synonymMap[keyword]) {
-        expanded.push(...synonymMap[keyword]);
-      }
-    });
-
-    return expanded;
-  }
-
-  /**
-   * Generate document section hierarchy for context stitching
-   */
   private generateDocumentSection(chunk: ProcessedChunk, allChunks: ProcessedChunk[], currentIndex: number): { parent: string; current: string; next?: string } {
     const metadata = chunk.metadata;
     const chunkType = metadata?.chunkType || 'general';
 
-    // Determine parent section based on document type
-    let parent = 'Product Overview';
-    if (metadata?.documentType === 'manual') {
-      parent = 'User Manual';
-    } else if (metadata?.documentType === 'technical') {
-      parent = 'Technical Documentation';
-    } else if (metadata?.documentType === 'invoice') {
-      parent = 'Invoice Details';
-    }
+    let parent = 'Document Overview';
+    if (metadata?.documentType === 'handbook') parent = 'Handbook';
+    else if (metadata?.documentType === 'manual') parent = 'User Manual';
+    else if (metadata?.documentType === 'technical') parent = 'Technical Documentation';
+    else if (metadata?.documentType === 'product') parent = 'Product Information';
 
-    // Current section is based on chunk type
     const current = this.chunkTypeToSectionName(chunkType);
 
-    // Next section preview (if available)
     let next: string | undefined;
     if (currentIndex < allChunks.length - 1) {
       const nextChunk = allChunks[currentIndex + 1];
@@ -1631,9 +1485,6 @@ GENERAL DOCUMENT - Ensure you capture:
     return { parent, current, next };
   }
 
-  /**
-   * Convert chunk type to human-readable section name
-   */
   private chunkTypeToSectionName(chunkType: string): string {
     const sectionMap: Record<string, string> = {
       'introduction': 'Introduction',
@@ -1641,8 +1492,6 @@ GENERAL DOCUMENT - Ensure you capture:
       'features': 'Features',
       'pricing': 'Pricing',
       'policies': 'Policies',
-      'use_cases': 'Use Cases',
-      'benefits': 'Benefits',
       'technical': 'Technical Details',
       'general': 'General Information'
     };
@@ -1650,76 +1499,49 @@ GENERAL DOCUMENT - Ensure you capture:
     return sectionMap[chunkType] || 'Information';
   }
 
-  /**
-   * Generate searchable text optimized for keyword search (BM25)
-   */
   private generateSearchableText(content: string, metadata: any): string {
     const parts: string[] = [];
 
-    // Add content
     parts.push(content);
-
-    // Add metadata fields that should be searchable
     if (metadata.title) parts.push(metadata.title);
     if (metadata.summary) parts.push(metadata.summary);
     if (metadata.productName) parts.push(metadata.productName);
     if (metadata.filename) parts.push(metadata.filename);
 
-    // Add key entities
     if (metadata.docMetadata?.key_entities) {
       const entities = metadata.docMetadata.key_entities;
       if (entities.product_name) parts.push(entities.product_name);
-      if (entities.dimensions) parts.push(entities.dimensions);
       if (entities.pricing) parts.push(`price ${entities.pricing}`);
-      if (entities.materials) {
-        Object.values(entities.materials).forEach((m: any) => {
-          if (typeof m === 'string') parts.push(m);
-        });
-      }
     }
 
-    // Add categories and topics
     if (metadata.docMetadata?.categories) {
       parts.push(...metadata.docMetadata.categories);
     }
-    if (metadata.docMetadata?.topics) {
-      parts.push(...metadata.docMetadata.topics);
-    }
 
-    // Join and normalize
     return parts.join(' ').toLowerCase().replace(/\s+/g, ' ').trim();
   }
 
-  /**
-   * Find links that are relevant to a specific chunk
-   */
   private findRelevantLinks(chunkContent: string, allLinks: ExtractedLink[], fullText: string): ExtractedLink[] {
     const relevantLinks: ExtractedLink[] = [];
     
-    // Find the position of this chunk in the full text
     const chunkStart = fullText.indexOf(chunkContent);
     if (chunkStart === -1) {
-      // If chunk not found in full text, return links that appear in the chunk content
       return allLinks.filter(link => 
-        link.position && 
-        chunkContent.includes(link.url.split('/').pop() || '') ||
+        chunkContent.includes(link.url) ||
         (link.text && chunkContent.includes(link.text))
       );
     }
     
     const chunkEnd = chunkStart + chunkContent.length;
     
-    // Find links that are within or near this chunk
     for (const link of allLinks) {
       if (link.position && link.position.x !== undefined) {
         const linkPosition = link.position.x;
         
-        // Include links that are within the chunk or within 200 characters of it
         if (linkPosition >= chunkStart - 200 && linkPosition <= chunkEnd + 200) {
           relevantLinks.push(link);
         }
       } else {
-        // For links without position info, check if they appear in the chunk content
         if (chunkContent.includes(link.url) || (link.text && chunkContent.includes(link.text))) {
           relevantLinks.push(link);
         }
@@ -1729,19 +1551,12 @@ GENERAL DOCUMENT - Ensure you capture:
     return relevantLinks;
   }
 
-  /**
-   * Extract links from text content using regex patterns
-   */
   private extractLinksFromText(text: string): ExtractedLink[] {
     const links: ExtractedLink[] = [];
     
-    // URL patterns
     const urlPattern = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/gi;
-    const imagePattern = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?[^\s<>"{}|\\^`\[\]]*)?)/gi;
     const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
-    const phonePattern = /(\+?[\d\s\-\(\)]{10,})/gi;
     
-    // Extract URLs
     let match;
     while ((match = urlPattern.exec(text)) !== null) {
       const url = match[1];
@@ -1754,20 +1569,6 @@ GENERAL DOCUMENT - Ensure you capture:
       });
     }
     
-    // Extract images (separate pass to avoid duplicates)
-    while ((match = imagePattern.exec(text)) !== null) {
-      const url = match[1];
-      // Check if not already added
-      if (!links.some(link => link.url === url)) {
-        links.push({
-          url,
-          type: 'image',
-          position: { x: match.index, y: 0 }
-        });
-      }
-    }
-    
-    // Extract emails
     while ((match = emailPattern.exec(text)) !== null) {
       links.push({
         url: `mailto:${match[1]}`,
@@ -1777,90 +1578,24 @@ GENERAL DOCUMENT - Ensure you capture:
       });
     }
     
-    // Extract phone numbers
-    while ((match = phonePattern.exec(text)) !== null) {
-      const phone = match[1].replace(/\s+/g, '');
-      if (phone.length >= 10) {
-        links.push({
-          url: `tel:${phone}`,
-          text: match[1],
-          type: 'phone',
-          position: { x: match.index, y: 0 }
-        });
-      }
-    }
-    
     return links;
   }
 
-  /**
-   * Extract links from DOCX using mammoth
-   */
   private async extractLinksFromDocx(buffer: Buffer): Promise<ExtractedLink[]> {
     try {
       const result = await mammoth.extractRawText({ buffer });
-      const links = this.extractLinksFromText(result.value);
-      
-      // Try to extract more detailed link information if available
-      const detailedResult = await mammoth.convertToHtml({ buffer });
-      if (detailedResult.value) {
-        // Extract links from HTML content
-        const htmlLinks = this.extractLinksFromHtml(detailedResult.value);
-        // Merge with text-based links, avoiding duplicates
-        const mergedLinks = [...links];
-        htmlLinks.forEach(htmlLink => {
-          if (!mergedLinks.some(link => link.url === htmlLink.url)) {
-            mergedLinks.push(htmlLink);
-          }
-        });
-        return mergedLinks;
-      }
-      
-      return links;
+      return this.extractLinksFromText(result.value);
     } catch (error) {
       console.warn('Failed to extract links from DOCX:', error);
       return [];
     }
   }
 
-  /**
-   * Extract links from HTML content
-   */
-  private extractLinksFromHtml(html: string): ExtractedLink[] {
-    const links: ExtractedLink[] = [];
-    
-    // Extract <a> tags
-    const linkPattern = /<a[^>]+href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
-    let match;
-    while ((match = linkPattern.exec(html)) !== null) {
-      links.push({
-        url: match[1],
-        text: match[2].trim(),
-        type: 'link'
-      });
-    }
-    
-    // Extract <img> tags
-    const imgPattern = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-    while ((match = imgPattern.exec(html)) !== null) {
-      links.push({
-        url: match[1],
-        type: 'image'
-      });
-    }
-    
-    return links;
-  }
-
-  /**
-   * Extract links from PDF using pdf2json
-   */
   private async extractLinksFromPdf(buffer: Buffer): Promise<ExtractedLink[]> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const pdfParser = new pdf2json();
       
-      pdfParser.on("pdfParser_dataError", (errData: any) => {
-        console.warn('PDF parsing error for link extraction:', errData.parserError);
+      pdfParser.on("pdfParser_dataError", () => {
         resolve([]);
       });
       
@@ -1878,15 +1613,13 @@ GENERAL DOCUMENT - Ensure you capture:
                   if (textItem.R) {
                     for (const run of textItem.R) {
                       if (run.T) {
-                        const decodedText = decodeURIComponent(run.T);
-                        pageText += decodedText;
+                        pageText += decodeURIComponent(run.T);
                       }
                     }
                   }
                 }
               }
               
-              // Extract links from page text
               const pageLinks = this.extractLinksFromText(pageText);
               pageLinks.forEach(link => {
                 if (link.position) {
@@ -1899,7 +1632,6 @@ GENERAL DOCUMENT - Ensure you capture:
           
           resolve(links);
         } catch (error) {
-          console.warn('Error extracting links from PDF:', error);
           resolve([]);
         }
       });
@@ -1908,9 +1640,6 @@ GENERAL DOCUMENT - Ensure you capture:
     });
   }
 
-  /**
-   * Calculate keyword density for ranking
-   */
   private calculateKeywordDensity(content: string, keywords: string[]): Record<string, number> {
     const density: Record<string, number> = {};
     const lowerContent = content.toLowerCase();
