@@ -6,10 +6,20 @@ import type { Document } from "../../../shared/schema.js";
 import mammoth from "mammoth";
 import pdf2json from "pdf2json";
 import OpenAI from "openai";
+import Anthropic from '@anthropic-ai/sdk';
+import axios from 'axios';
+import { pdfToPng } from 'pdf-to-png-converter';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
 
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 export interface ExtractedLink {
@@ -19,9 +29,19 @@ export interface ExtractedLink {
   position?: { page?: number; x?: number; y?: number };
 }
 
+export interface VisualElement {
+  type: 'chart' | 'diagram' | 'image' | 'table' | 'flowchart' | 'graph';
+  description: string;
+  caption?: string;
+  position?: { page?: number; x?: number; y?: number };
+  data?: any; // For structured data from charts/tables
+  altText?: string;
+}
+
 export interface ExtractedContent {
   text: string;
   links: ExtractedLink[];
+  visualElements: VisualElement[];
 }
 
 export interface ProcessedChunk {
@@ -30,6 +50,7 @@ export interface ProcessedChunk {
   metadata?: any;
   qualityScore?: number;
   links?: ExtractedLink[];
+  visualElements?: VisualElement[];
 }
 
 export interface ChunkingStrategy {
@@ -79,13 +100,22 @@ export class DocumentProcessor {
       await storage.updateDocumentStatus(document.id, "processing");
 
       // Extract text with enhanced extraction
-      const extractedContent = await this.extractText(fileBuffer, document.fileType);
+      let extractedContent: ExtractedContent;
+      
+      // Handle PDF URLs specially with Claude
+      if (document.fileType.toLowerCase() === 'pdf' && sourceUrl) {
+        console.log(`Processing PDF from URL: ${sourceUrl}`);
+        extractedContent = await this.extractPdfWithClaudeFromUrl(sourceUrl);
+      } else {
+        extractedContent = await this.extractText(fileBuffer, document.fileType);
+      }
       
       // Clean and normalize the extracted text
       const text = this.cleanAndNormalizeText(extractedContent.text);
       
       console.log(`Extracted text length: ${text.length} characters (cleaned from ${extractedContent.text.length})`);
       console.log(`Extracted ${extractedContent.links.length} links from document`);
+      console.log(`Extracted ${extractedContent.visualElements.length} visual elements from document`);
       
       // Validate text quality
       // if (!this.validateTextQuality(text)) {
@@ -105,14 +135,16 @@ export class DocumentProcessor {
       
       // Convert AI chunks to ProcessedChunks
       const processedChunks = aiChunkingResult.chunks.map((aiChunk, index) => {
-        // Find links that are relevant to this chunk
+        // Find links and visual elements that are relevant to this chunk
         const chunkLinks = this.findRelevantLinks(aiChunk.content, extractedContent.links, text);
+        const chunkVisualElements = this.findRelevantVisualElements(aiChunk.content, extractedContent.visualElements, text);
         
         return {
           content: aiChunk.content,
           chunkIndex: index,
           qualityScore: Math.min(aiChunk.importance / 10, 1), // Convert importance to quality score
           links: chunkLinks,
+          visualElements: chunkVisualElements,
           metadata: {
             filename: document.originalName,
             productName: document.originalName,
@@ -128,8 +160,10 @@ export class DocumentProcessor {
             documentType: aiChunkingResult.documentType,
             sourceUrl: sourceUrl || (document.metadata as any)?.sourceUrl, // Include source URL if available
             uploadType: (document.metadata as any)?.uploadType || 'file',
-            // Include all document links for reference
-            documentLinks: extractedContent.links
+            // Include all document links and visual elements for reference
+            documentLinks: extractedContent.links,
+            documentVisualElements: extractedContent.visualElements,
+            visualElementCount: chunkVisualElements.length
           }
         };
       });
@@ -177,6 +211,14 @@ export class DocumentProcessor {
           linkCount: chunk.links ? chunk.links.length : 0,
           imageLinks: chunk.links ? chunk.links.filter(link => link.type === 'image') : [],
           externalLinks: chunk.links ? chunk.links.filter(link => link.type === 'link') : [],
+          
+          // Visual elements
+          visualElements: chunk.visualElements || [],
+          visualElementCount: chunk.visualElements ? chunk.visualElements.length : 0,
+          charts: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'chart') : [],
+          diagrams: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'diagram') : [],
+          tables: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'table') : [],
+          images: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'image') : [],
         };
         
         // Store chunk in database with enhanced metadata
@@ -202,16 +244,22 @@ export class DocumentProcessor {
             uploadTimestamp: Date.now(),
             originalChunkId: savedChunk.id,
             chunkReference: `${document.id}_${chunk.chunkIndex}`,
-            // Include links in the payload for RAG retrieval
+            // Include links and visual elements in the payload for RAG retrieval
             links: chunk.links || [],
             imageLinks: chunk.links ? chunk.links.filter(link => link.type === 'image') : [],
             externalLinks: chunk.links ? chunk.links.filter(link => link.type === 'link') : [],
+            visualElements: chunk.visualElements || [],
+            visualElementCount: chunk.visualElements ? chunk.visualElements.length : 0,
+            charts: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'chart') : [],
+            diagrams: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'diagram') : [],
+            tables: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'table') : [],
+            images: chunk.visualElements ? chunk.visualElements.filter(v => v.type === 'image') : [],
           },
         });
       }
 
       // Add to vector database
-      await qdrantService.addPoints(vectorChunks);
+      // await qdrantService.addPoints(vectorChunks);
       // Also store the vector chunks in a file for debugging (optional)
       console.log(`Processed ${vectorChunks.length} chunks with enhanced extraction`);
       // Update document status
@@ -1174,7 +1222,8 @@ GENERAL DOCUMENT - Ensure you capture:
         const text = buffer.toString('utf-8');
         return {
           text,
-          links: this.extractLinksFromText(text)
+          links: this.extractLinksFromText(text),
+          visualElements: []
         };
       
       case 'md':
@@ -1182,14 +1231,19 @@ GENERAL DOCUMENT - Ensure you capture:
         const markdownText = buffer.toString('utf-8');
         return {
           text: markdownText,
-          links: this.extractLinksFromText(markdownText)
+          links: this.extractLinksFromText(markdownText),
+          visualElements: []
         };
       
       case 'pdf':
         try {
-          const text = await this.extractPdfTextEnhanced(buffer);
-          const links = await this.extractLinksFromPdf(buffer);
-          return { text, links };
+          const extractedContent = await this.extractPdfTextEnhanced(buffer);
+          // Merge with additional links from pdf2json if needed
+          const additionalLinks = await this.extractLinksFromPdf(buffer);
+          return {
+            ...extractedContent,
+            links: [...extractedContent.links, ...additionalLinks]
+          };
         } catch (error) {
           throw new Error(`Failed to extract PDF text: ${(error as Error).message}`);
         }
@@ -1200,7 +1254,8 @@ GENERAL DOCUMENT - Ensure you capture:
           const links = await this.extractLinksFromDocx(buffer);
           return {
             text: result.value,
-            links
+            links,
+            visualElements: []
           };
         } catch (error) {
           throw new Error(`Failed to extract DOCX text: ${(error as Error).message}`);
@@ -1211,8 +1266,642 @@ GENERAL DOCUMENT - Ensure you capture:
     }
   }
 
-  private async extractPdfTextEnhanced(buffer: Buffer): Promise<string> {
-    return new Promise((resolve, reject) => {
+  /**
+   * Extract text from PDF URL using page-by-page PNG extraction
+   * Downloads PDF and processes each page as an image for complete extraction
+   */
+  private async extractPdfWithClaudeFromUrl(pdfUrl: string): Promise<ExtractedContent> {
+    try {
+      console.log(`Downloading PDF from URL for page-by-page extraction...`);
+      
+      // Download PDF
+      const response = await axios.get(pdfUrl, {
+        responseType: 'arraybuffer',
+        timeout: 60000, // 60 second timeout
+        maxContentLength: 50 * 1024 * 1024, // 50MB max
+      });
+      
+      const pdfBuffer = Buffer.from(response.data);
+      console.log(`Downloaded ${(pdfBuffer.length / 1024).toFixed(0)} KB`);
+      
+      // Use page-by-page extraction for reliability
+      return await this.extractPdfPageByPage(pdfBuffer);
+      
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        throw new Error(`Failed to download PDF: ${error.message}`);
+      }
+      throw new Error(`PDF extraction from URL failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Legacy method: Extract text from PDF URL using direct PDF processing
+   * Kept as fallback option
+   */
+  private async extractPdfWithClaudeFromUrlDirect(pdfUrl: string): Promise<ExtractedContent> {
+    try {
+      console.log(`Downloading PDF from URL for direct extraction...`);
+      
+      // Download PDF
+      const response = await axios.get(pdfUrl, {
+        responseType: 'arraybuffer',
+        timeout: 60000, // 60 second timeout
+        maxContentLength: 50 * 1024 * 1024, // 50MB max
+      });
+      
+      const pdfBuffer = Buffer.from(response.data);
+      console.log(`Downloaded ${(pdfBuffer.length / 1024).toFixed(0)} KB`);
+      
+      // Convert to base64
+      const base64Pdf = pdfBuffer.toString('base64');
+      
+      console.log(`Sending PDF to Claude 3.5 Sonnet for extraction...`);
+      
+      const claudeResponse = await anthropic.messages.create({
+        model: "claude-3-5-sonnet-20241022",
+        max_tokens: 8192,
+        temperature: 0,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: base64Pdf
+                }
+              },
+              {
+                type: "text",
+                text: `Extract ALL content from this PDF - both text AND visual information.
+
+CRITICAL REQUIREMENTS:
+
+1. TEXT EXTRACTION:
+   - Extract all written text exactly as it appears
+   - Maintain structure: headings, paragraphs, lists, tables
+   - Preserve formatting and hierarchy
+   - Fix obvious OCR errors (e.g., "F r i d o" → "Frido")
+   - Include ALL pages - do not skip any content
+
+2. VISUAL CONTENT ANALYSIS (CRITICAL):
+   - Describe ALL diagrams, charts, and flowcharts in detail
+   - Explain what each diagram shows and represents
+   - Capture relationships and flows shown visually
+   - Describe data visualizations (bars, lines, percentages)
+   - Extract information from maps and geographic visuals
+   - Describe organizational charts and hierarchies
+   - Explain process flows and decision trees
+   - Capture information from infographics
+   - Describe tables and structured data layouts
+   - Note images and what they represent
+
+3. SPECIFIC VISUAL ELEMENTS TO CAPTURE:
+   - Flowcharts: Describe each box, arrow, and flow
+   - Diagrams: Explain components and their relationships
+   - Charts/Graphs: Extract data points, labels, trends
+   - Maps: Describe locations, markers, regions
+   - Photos: Describe what they show and their context
+   - Icons: Explain what they represent
+   - Tables: Extract all rows and columns
+   - Timelines: Capture sequence and dates
+   - Organizational structures: Describe hierarchy
+
+4. OUTPUT FORMAT:
+   For each page, provide:
+   - Page number/header (if any)
+   - All text content
+   - After each section with visuals, add:
+     [VISUAL: Detailed description of diagram/chart/image]
+   - Maintain logical flow
+
+EXAMPLE OUTPUT FORMAT:
+
+Page 5:
+
+ABOUT FRIDO
+
+Frido's Marketing Growth Playbook
+
+[VISUAL: This page contains a comprehensive flowchart diagram showing the marketing strategy:
+
+Top Section - Problem Awareness:
+- "Talk About the Problem" box
+- "Own the Problem" box
+- Connected by arrows to "Problem Awareness" banner
+
+Middle Section - Solution Awareness:
+- "Ads on Meta, Google etc" box
+- "Influencer/Affiliate Marketing" box
+- "Sales Across Platforms" box
+- "Customer Review & Feedback" box
+- All connected with arrows showing flow
+- Feedback loop arrow connecting back to top
+
+Bottom Section - Enhanced Channels:
+- "Offline Sales" → "Enhanced Brand Presence" → "Marketplace" → "Halo Effect" → "Our Own Website myfrido.com"
+- Shows omnichannel strategy flow
+
+Additional Boxes:
+- "We Own our Design IP" → "From R&D to Production to Commercialization"
+- "We Own our Marketing IP" → "From Ideating - Planning - Creative - Production"
+- Both leading to "Complete Control Over Product Life Cycle"
+
+The diagram uses yellow and beige boxes with black text, connected by directional arrows showing the complete marketing ecosystem and feedback mechanisms.]
+
+(Text content continues...)
+
+REMEMBER:
+- Do not skip any pages or visual elements
+- Describe diagrams as if explaining to someone who cannot see them
+- Include all data points from charts
+- Capture spatial relationships and flows
+- Explain what visual elements communicate
+- Process every single page in the document
+
+Output: Complete extraction with text + visual descriptions for ALL pages.`
+              }
+            ]
+          }
+        ]
+      });
+
+      const extractedText = claudeResponse.content
+        .filter(block => block.type === 'text')
+        .map(block => block.type === 'text' ? block.text : '')
+        .join('\n');
+      
+      if (!extractedText || extractedText.trim().length < 100) {
+        throw new Error('Insufficient text extracted from PDF');
+      }
+
+      console.log(`✅ Claude extracted ${extractedText.length} characters`);
+      
+      // Extract visual elements from the comprehensive response
+      const visualElements = this.extractVisualElementsFromText(extractedText);
+      console.log(`✅ Found ${visualElements.length} visual elements`);
+      
+      return {
+        text: extractedText.trim(),
+        links: this.extractLinksFromText(extractedText),
+        visualElements
+      };
+      
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        throw new Error(`Failed to download PDF: ${error.message}`);
+      }
+      throw new Error(`Claude PDF extraction failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Extract visual elements from Claude's comprehensive response
+   */
+  private extractVisualElementsFromText(text: string): VisualElement[] {
+    const visualElements: VisualElement[] = [];
+    
+    // Patterns to identify visual content descriptions
+    const visualPatterns = [
+      // Chart patterns
+      {
+        type: 'chart' as const,
+        patterns: [
+          /chart shows? (.*?)(?:\n|$)/gi,
+          /graph displays? (.*?)(?:\n|$)/gi,
+          /bar chart (.*?)(?:\n|$)/gi,
+          /pie chart (.*?)(?:\n|$)/gi,
+          /line graph (.*?)(?:\n|$)/gi
+        ]
+      },
+      // Diagram patterns
+      {
+        type: 'diagram' as const,
+        patterns: [
+          /diagram shows? (.*?)(?:\n|$)/gi,
+          /flowchart illustrates? (.*?)(?:\n|$)/gi,
+          /process diagram (.*?)(?:\n|$)/gi,
+          /workflow diagram (.*?)(?:\n|$)/gi
+        ]
+      },
+      // Table patterns
+      {
+        type: 'table' as const,
+        patterns: [
+          /table contains? (.*?)(?:\n|$)/gi,
+          /data table (.*?)(?:\n|$)/gi,
+          /comparison table (.*?)(?:\n|$)/gi
+        ]
+      },
+      // Image patterns
+      {
+        type: 'image' as const,
+        patterns: [
+          /image shows? (.*?)(?:\n|$)/gi,
+          /figure displays? (.*?)(?:\n|$)/gi,
+          /picture of (.*?)(?:\n|$)/gi,
+          /photograph shows? (.*?)(?:\n|$)/gi
+        ]
+      }
+    ];
+
+    // Extract visual elements using patterns
+    visualPatterns.forEach(({ type, patterns }) => {
+      patterns.forEach(pattern => {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          const description = match[1]?.trim();
+          if (description && description.length > 10) {
+            visualElements.push({
+              type,
+              description,
+              position: { x: match.index }
+            });
+          }
+        }
+      });
+    });
+
+    // Also look for explicit visual content markers
+    const explicitPatterns = [
+      /\[CHART\]:\s*(.*?)(?:\n|$)/gi,
+      /\[DIAGRAM\]:\s*(.*?)(?:\n|$)/gi,
+      /\[TABLE\]:\s*(.*?)(?:\n|$)/gi,
+      /\[IMAGE\]:\s*(.*?)(?:\n|$)/gi,
+      /\[GRAPH\]:\s*(.*?)(?:\n|$)/gi
+    ];
+
+    explicitPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const description = match[1]?.trim();
+        if (description && description.length > 10) {
+          const type = match[0].toLowerCase().includes('chart') ? 'chart' :
+                      match[0].toLowerCase().includes('diagram') ? 'diagram' :
+                      match[0].toLowerCase().includes('table') ? 'table' :
+                      match[0].toLowerCase().includes('image') ? 'image' :
+                      match[0].toLowerCase().includes('graph') ? 'graph' : 'image';
+          
+          visualElements.push({
+            type: type as VisualElement['type'],
+            description,
+            position: { x: match.index }
+          });
+        }
+      }
+    });
+
+    return visualElements;
+  }
+
+  /**
+   * Extract content from PDF by converting each page to PNG and processing with Claude
+   * This method ensures ALL pages are processed without missing content
+   */
+  private async extractPdfPageByPage(buffer: Buffer): Promise<ExtractedContent> {
+    let tempDir: string | null = null;
+    
+    try {
+      console.log(`Converting PDF to PNG images for page-by-page extraction...`);
+      
+      // Create a temporary directory for PNG files
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pdf-extraction-'));
+      
+      // Save PDF to temp file for conversion
+      const tempPdfPath = path.join(tempDir, 'input.pdf');
+      await fs.writeFile(tempPdfPath, buffer);
+      
+      // Convert PDF to PNG images (one per page)
+      const pngPages = await pdfToPng(tempPdfPath, {
+        disableFontFace: false,
+        useSystemFonts: false,
+        viewportScale: 2.0, // Higher resolution for better text recognition
+      });
+      
+      console.log(`✅ Converted PDF to ${pngPages.length} PNG images`);
+      
+      // Process each page with Claude
+      const allText: string[] = [];
+      const allVisualElements: VisualElement[] = [];
+      
+      for (let i = 0; i < pngPages.length; i++) {
+        const pageNum = i + 1;
+        console.log(`Processing page ${pageNum}/${pngPages.length}...`);
+        
+        try {
+          // Convert PNG buffer to base64
+          const base64Image = pngPages[i].content.toString('base64');
+          
+          // Extract content from this page
+          const pageResponse = await anthropic.messages.create({
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 4096,
+            temperature: 0,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: "image/png",
+                      data: base64Image
+                    }
+                  },
+                  {
+                    type: "text",
+                    text: `Extract ALL content from this page (Page ${pageNum}) - both text AND visual information.
+
+CRITICAL REQUIREMENTS:
+
+1. TEXT EXTRACTION:
+   - Extract all written text exactly as it appears
+   - Maintain structure: headings, paragraphs, lists, tables
+   - Preserve formatting and hierarchy
+   - Fix obvious OCR errors (e.g., "F r i d o" → "Frido")
+
+2. VISUAL CONTENT ANALYSIS (CRITICAL):
+   - Describe ALL diagrams, charts, and flowcharts in detail
+   - Explain what each diagram shows and represents
+   - Capture relationships and flows shown visually
+   - Describe data visualizations (bars, lines, percentages)
+   - Extract information from maps and geographic visuals
+   - Describe organizational charts and hierarchies
+   - Explain process flows and decision trees
+   - Capture information from infographics
+   - Describe tables and structured data layouts
+   - Note images and what they represent
+
+3. OUTPUT FORMAT:
+   Start with: === PAGE ${pageNum} ===
+   
+   Then provide:
+   - All text content
+   - For each visual element, add:
+     [VISUAL: Detailed description]
+   
+   Example:
+   === PAGE ${pageNum} ===
+   
+   Marketing Growth Playbook
+   
+   [VISUAL: Flowchart showing:
+   - Top: "Problem Awareness" boxes
+   - Middle: Solution channels with arrows
+   - Bottom: Complete product lifecycle
+   - Colors: Yellow/beige boxes, black text
+   - Arrows showing workflow and feedback loops]
+
+IMPORTANT:
+- Describe diagrams as if explaining to someone who cannot see them
+- Include all data points, percentages, and labels
+- Capture spatial relationships and flows
+- Explain what visual elements communicate
+
+Output: Complete extraction for Page ${pageNum}.`
+                  }
+                ]
+              }
+            ]
+          });
+          
+          const pageText = pageResponse.content
+            .filter(block => block.type === 'text')
+            .map(block => block.type === 'text' ? block.text : '')
+            .join('\n');
+          
+          if (pageText && pageText.trim().length > 20) {
+            allText.push(pageText.trim());
+            
+            // Extract visual elements from this page
+            const pageVisualElements = this.extractVisualElementsFromText(pageText);
+            pageVisualElements.forEach(visual => {
+              if (visual.position) {
+                visual.position.page = pageNum;
+              } else {
+                visual.position = { page: pageNum };
+              }
+            });
+            allVisualElements.push(...pageVisualElements);
+            
+            console.log(`  ✅ Page ${pageNum}: ${pageText.length} chars, ${pageVisualElements.length} visuals`);
+          } else {
+            console.log(`  ⚠️  Page ${pageNum}: Minimal content extracted`);
+          }
+          
+          // Small delay to avoid rate limiting
+          if (i < pngPages.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          
+        } catch (pageError) {
+          console.error(`  ❌ Error processing page ${pageNum}:`, pageError);
+          allText.push(`\n=== PAGE ${pageNum} ===\n[Error extracting page ${pageNum}]\n`);
+        }
+      }
+      
+      // Combine all pages
+      const combinedText = allText.join('\n\n');
+      
+      console.log(`✅ Page-by-page extraction complete: ${combinedText.length} total characters`);
+      console.log(`✅ Found ${allVisualElements.length} total visual elements across all pages`);
+      
+      return {
+        text: combinedText,
+        links: this.extractLinksFromText(combinedText),
+        visualElements: allVisualElements
+      };
+      
+    } catch (error) {
+      console.error('Page-by-page PDF extraction failed:', error);
+      throw new Error(`Page-by-page PDF extraction failed: ${(error as Error).message}`);
+    } finally {
+      // Clean up temporary directory
+      if (tempDir) {
+        try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+          console.log('✅ Cleaned up temporary files');
+        } catch (cleanupError) {
+          console.warn('Warning: Failed to clean up temp directory:', cleanupError);
+        }
+      }
+    }
+  }
+
+  /**
+   * Extract text from PDF using Claude 3.5 Sonnet (primary method)
+   * Claude natively supports PDFs and provides superior text extraction
+   */
+  private async extractPdfWithClaude(buffer: Buffer): Promise<ExtractedContent> {
+    try {
+      console.log(`Processing PDF with Claude 3.5 Sonnet...`);
+      
+      // Convert buffer to base64
+      const base64Pdf = buffer.toString('base64');
+      console.log(`PDF size: ${(buffer.length / 1024).toFixed(0)} KB`);
+      
+      console.log(`Sending PDF to Claude 3.5 Sonnet for extraction...`);
+      
+      const claudeResponse = await anthropic.messages.create({
+        model: "claude-3-5-sonnet-20241022",
+        max_tokens: 8192,
+        temperature: 0,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: base64Pdf
+                }
+              },
+              {
+                type: "text",
+                text: `Extract ALL content from this PDF - both text AND visual information.
+
+CRITICAL REQUIREMENTS:
+
+1. TEXT EXTRACTION:
+   - Extract all written text exactly as it appears
+   - Maintain structure: headings, paragraphs, lists, tables
+   - Preserve formatting and hierarchy
+   - Fix obvious OCR errors (e.g., "F r i d o" → "Frido")
+   - Include ALL pages - do not skip any content
+
+2. VISUAL CONTENT ANALYSIS (CRITICAL):
+   - Describe ALL diagrams, charts, and flowcharts in detail
+   - Explain what each diagram shows and represents
+   - Capture relationships and flows shown visually
+   - Describe data visualizations (bars, lines, percentages)
+   - Extract information from maps and geographic visuals
+   - Describe organizational charts and hierarchies
+   - Explain process flows and decision trees
+   - Capture information from infographics
+   - Describe tables and structured data layouts
+   - Note images and what they represent
+
+3. SPECIFIC VISUAL ELEMENTS TO CAPTURE:
+   - Flowcharts: Describe each box, arrow, and flow
+   - Diagrams: Explain components and their relationships
+   - Charts/Graphs: Extract data points, labels, trends
+   - Maps: Describe locations, markers, regions
+   - Photos: Describe what they show and their context
+   - Icons: Explain what they represent
+   - Tables: Extract all rows and columns
+   - Timelines: Capture sequence and dates
+   - Organizational structures: Describe hierarchy
+
+4. OUTPUT FORMAT:
+   For each page, provide:
+   - Page number/header (if any)
+   - All text content
+   - After each section with visuals, add:
+     [VISUAL: Detailed description of diagram/chart/image]
+   - Maintain logical flow
+
+EXAMPLE OUTPUT FORMAT:
+
+Page 5:
+
+ABOUT FRIDO
+
+Frido's Marketing Growth Playbook
+
+[VISUAL: This page contains a comprehensive flowchart diagram showing the marketing strategy:
+
+Top Section - Problem Awareness:
+- "Talk About the Problem" box
+- "Own the Problem" box
+- Connected by arrows to "Problem Awareness" banner
+
+Middle Section - Solution Awareness:
+- "Ads on Meta, Google etc" box
+- "Influencer/Affiliate Marketing" box
+- "Sales Across Platforms" box
+- "Customer Review & Feedback" box
+- All connected with arrows showing flow
+- Feedback loop arrow connecting back to top
+
+Bottom Section - Enhanced Channels:
+- "Offline Sales" → "Enhanced Brand Presence" → "Marketplace" → "Halo Effect" → "Our Own Website myfrido.com"
+- Shows omnichannel strategy flow
+
+Additional Boxes:
+- "We Own our Design IP" → "From R&D to Production to Commercialization"
+- "We Own our Marketing IP" → "From Ideating - Planning - Creative - Production"
+- Both leading to "Complete Control Over Product Life Cycle"
+
+The diagram uses yellow and beige boxes with black text, connected by directional arrows showing the complete marketing ecosystem and feedback mechanisms.]
+
+(Text content continues...)
+
+REMEMBER:
+- Do not skip any pages or visual elements
+- Describe diagrams as if explaining to someone who cannot see them
+- Include all data points from charts
+- Capture spatial relationships and flows
+- Explain what visual elements communicate
+- Process every single page in the document
+
+Output: Complete extraction with text + visual descriptions for ALL pages.`
+              }
+            ]
+          }
+        ]
+      });
+
+      const extractedText = claudeResponse.content
+        .filter(block => block.type === 'text')
+        .map(block => block.type === 'text' ? block.text : '')
+        .join('\n');
+      
+      if (!extractedText || extractedText.trim().length < 100) {
+        throw new Error('Insufficient text extracted from PDF by Claude');
+      }
+
+      console.log(`✅ Claude extracted ${extractedText.length} characters`);
+      
+      // Extract visual elements from the comprehensive response
+      const visualElements = this.extractVisualElementsFromText(extractedText);
+      console.log(`✅ Found ${visualElements.length} visual elements`);
+      
+      return {
+        text: extractedText.trim(),
+        links: this.extractLinksFromText(extractedText),
+        visualElements
+      };
+      
+    } catch (error) {
+      console.error('Claude PDF extraction failed:', error);
+      throw new Error(`Claude PDF extraction failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Enhanced PDF text extraction with fallback to traditional methods
+   */
+  private async extractPdfTextEnhanced(buffer: Buffer): Promise<ExtractedContent> {
+    // First try page-by-page PNG extraction for most reliable results
+    try {
+      return await this.extractPdfPageByPage(buffer);
+    } catch (pageByPageError) {
+      console.warn('Page-by-page extraction failed, trying direct PDF method:', pageByPageError);
+      
+      // Second attempt: Try direct PDF with Claude
+      try {
+        return await this.extractPdfWithClaude(buffer);
+      } catch (claudeError) {
+        console.warn('Claude PDF extraction failed, falling back to traditional method:', claudeError);
+        
+        // Final fallback to traditional pdf2json method
+        return new Promise((resolve, reject) => {
       const pdfParser = new pdf2json();
       
       pdfParser.on("pdfParser_dataError", (errData: any) => {
@@ -1273,15 +1962,22 @@ GENERAL DOCUMENT - Ensure you capture:
           if (text.length < 50) {
             reject(new Error('PDF text extraction failed - document appears to be empty or corrupted'));
           } else {
-            resolve(text);
+              console.log(`✅ Traditional method extracted ${text.length} characters`);
+              resolve({
+                text,
+                links: this.extractLinksFromText(text),
+                visualElements: [] // Traditional method doesn't extract visual elements
+              });
           }
         } catch (parseError) {
           reject(new Error(`Failed to parse PDF content: ${(parseError as Error).message}`));
         }
       });
-      
-      pdfParser.parseBuffer(buffer);
-    });
+        
+        pdfParser.parseBuffer(buffer);
+      });
+      }
+    }
   }
 
   private cleanAndNormalizeText(text: string): string {
@@ -1727,6 +2423,45 @@ GENERAL DOCUMENT - Ensure you capture:
     }
     
     return relevantLinks;
+  }
+
+  /**
+   * Find visual elements that are relevant to a specific chunk
+   */
+  private findRelevantVisualElements(chunkContent: string, allVisualElements: VisualElement[], fullText: string): VisualElement[] {
+    const relevantVisualElements: VisualElement[] = [];
+    
+    // Find the position of this chunk in the full text
+    const chunkStart = fullText.indexOf(chunkContent);
+    if (chunkStart === -1) {
+      // If chunk not found in full text, return visual elements that appear in the chunk content
+      return allVisualElements.filter(visual => 
+        chunkContent.toLowerCase().includes(visual.description.toLowerCase().substring(0, 20)) ||
+        chunkContent.toLowerCase().includes(visual.type)
+      );
+    }
+    
+    const chunkEnd = chunkStart + chunkContent.length;
+    
+    // Find visual elements that are within or near this chunk
+    for (const visual of allVisualElements) {
+      if (visual.position && visual.position.x !== undefined) {
+        const visualPosition = visual.position.x;
+        
+        // Include visual elements that are within the chunk or within 300 characters of it
+        if (visualPosition >= chunkStart - 300 && visualPosition <= chunkEnd + 300) {
+          relevantVisualElements.push(visual);
+        }
+      } else {
+        // For visual elements without position info, check if they appear in the chunk content
+        if (chunkContent.toLowerCase().includes(visual.description.toLowerCase().substring(0, 20)) ||
+            chunkContent.toLowerCase().includes(visual.type)) {
+          relevantVisualElements.push(visual);
+        }
+      }
+    }
+    
+    return relevantVisualElements;
   }
 
   /**
