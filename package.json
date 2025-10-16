@@ -18,6 +18,7 @@
     "create-qdrant-index": "tsx scripts/create-qdrant-index.ts"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@neondatabase/serverless": "^0.10.4",
     "@qdrant/js-client-rest": "^1.15.0",
     "@types/multer": "^1.4.13",

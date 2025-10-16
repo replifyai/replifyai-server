@@ -16,6 +16,9 @@ export const env = {
   // OpenAI
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR || '',
   
+  // Google Gemini
+  GOOGLE_API_KEY: process.env.GOOGLE_API_KEY || '',
+  
   // Groq
   GROQ_API_KEY: process.env.GROQ_API_KEY || '',
   GROQ_MODEL: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',

@@ -8,12 +8,15 @@ import pdf2json from "pdf2json";
 import OpenAI from "openai";
 import { pdfToPng } from "pdf-to-png-converter";
 import { inferenceProvider } from "../../services/llm/inference.js";
-import * as fs from 'fs';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { env } from "../../env.js";
 
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: env.OPENAI_API_KEY,
 });
+
+const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
 
 export interface ExtractedLink {
   url: string;
@@ -91,24 +94,11 @@ export class DocumentProcessor {
       console.log(`✅ Extracted ${extractedContent.text.length} characters`);
       console.log(`✅ Found ${extractedContent.links.length} links`);
       
-      // Save raw extracted text for debugging
-      const debugDir = './debug_documents';
-      if (!fs.existsSync(debugDir)) {
-        fs.mkdirSync(debugDir, { recursive: true });
-      }
-      const rawTextPath = `${debugDir}/raw_${document.id}.txt`;
-      await fs.promises.writeFile(rawTextPath, extractedContent.text);
-      console.log(`📝 Raw text saved to: ${rawTextPath}`);
-
       // Clean and normalize the extracted text
       console.log(`\n🧹 Step 2: Cleaning and normalizing text...`);
       const text = this.cleanAndNormalizeText(extractedContent.text);
       console.log(`✅ Cleaned text: ${text.length} characters (from ${extractedContent.text.length})`);
       
-      // Save cleaned text for debugging
-      const cleanedTextPath = `${debugDir}/cleaned_${document.id}.txt`;
-      await fs.promises.writeFile(cleanedTextPath, text);
-      console.log(`📝 Cleaned text saved to: ${cleanedTextPath}`);
       
       // Validate text quality
       const qualityCheck = this.validateTextQuality(text);
@@ -132,24 +122,11 @@ export class DocumentProcessor {
       const aiChunkingResult = await this.createAIChunks(text, document.originalName, strategy);
       
       console.log(`✅ Successfully created ${aiChunkingResult.chunks.length} chunks`);
+      console.log(`📊 TOTAL CHUNKS CREATED: ${aiChunkingResult.chunks.length}`);
       console.log(`   Document Type: ${aiChunkingResult.documentType}`);
       console.log(`   Document Summary: ${aiChunkingResult.documentSummary.substring(0, 100)}...`);
 
-      // Log chunk details
-      console.log(`\n📦 Chunk Details:`);
-      aiChunkingResult.chunks.forEach((chunk, i) => {
-        console.log(`   Chunk ${i + 1}:`);
-        console.log(`      Title: ${chunk.title}`);
-        console.log(`      Length: ${chunk.content.length} chars`);
-        console.log(`      Type: ${chunk.chunkType}`);
-        console.log(`      Importance: ${chunk.importance}/10`);
-        console.log(`      Topics: ${chunk.keyTopics.slice(0, 3).join(', ')}`);
-      });
 
-      // Save chunks for debugging
-      const chunksPath = `${debugDir}/chunks_${document.id}.json`;
-      await fs.promises.writeFile(chunksPath, JSON.stringify(aiChunkingResult, null, 2));
-      console.log(`\n📝 Chunks saved to: ${chunksPath}`);
       
       // Convert AI chunks to ProcessedChunks
       console.log(`\n🔗 Step 6: Processing chunks and linking...`);
@@ -240,7 +217,7 @@ export class DocumentProcessor {
 
         vectorChunks.push({
           id: savedChunk.id,
-          // vector: embedding,
+          vector: embedding,
           payload: {
             documentId: document.id,
             chunkIndex: chunk.chunkIndex,
@@ -260,10 +237,9 @@ export class DocumentProcessor {
       }
 
       console.log(`✅ Created ${vectorChunks.length} vector chunks with embeddings`);
-      console.log("🚀 ~ DocumentProcessor ~ processDocument ~ vectorChunks:", JSON.stringify(vectorChunks, null, 2));
 
       // Add to vector database
-      // await qdrantService.addPoints(vectorChunks);
+      await qdrantService.addPoints(vectorChunks);
       
       console.log(`\n💾 Step 8: Updating document status...`);
       await storage.updateDocumentStatus(document.id, "indexed", new Date());
@@ -271,9 +247,9 @@ export class DocumentProcessor {
       
       console.log(`\n${'='.repeat(80)}`);
       console.log(`✅ SUCCESSFULLY PROCESSED: ${document.originalName}`);
-      console.log(`   - Total chunks: ${processedChunks.length}`);
-      console.log(`   - Total characters: ${text.length}`);
-      console.log(`   - Total links: ${extractedContent.links.length}`);
+      console.log(`📊 TOTAL CHUNKS: ${processedChunks.length}`);
+      console.log(`📝 Total characters: ${text.length}`);
+      console.log(`🔗 Total links: ${extractedContent.links.length}`);
       console.log(`${'='.repeat(80)}\n`);
 
     } catch (error) {
@@ -1093,96 +1069,147 @@ Remember: EXTRACT ONLY. Do not create, infer, summarize, or rephrase. Copy the e
   }
 
   /**
-   * FIXED: Extract text from PDF with vision fallback for image-based PDFs
+   * Extract text from PDF - prioritize Gemini for better quality, fallback to traditional
    */
   private async extractPdfTextWithVisionFallback(buffer: Buffer): Promise<string> {
     try {
-      console.log(`      🔍 Attempting traditional PDF text extraction...`);
-      const traditionalText = await this.extractPdfTextEnhanced(buffer);
+      console.log(`      🤖 Using Gemini 2.0 Flash for PDF extraction (primary method)...`);
+      const geminiText = await this.extractTextFromPdfUsingMultimodal(buffer);
+      console.log(`      ✅ Gemini extraction successful (${geminiText.length} chars)`);
+      return geminiText;
       
-      // Validate quality
-      if (this.validateTextQuality(traditionalText)) {
-        console.log(`      ✅ Traditional extraction successful (${traditionalText.length} chars)`);
-        return traditionalText;
-      }
-      
-      console.log(`      ⚠️  Traditional extraction quality poor, using vision fallback...`);
-      throw new Error("Poor text quality from traditional extraction");
-      
-    } catch (error) {
-      console.log(`      🤖 Using multimodal vision extraction...`);
+    } catch (geminiError) {
+      console.log(`      ⚠️  Gemini extraction failed: ${(geminiError as Error).message}`);
+      console.log(`      🔍 Attempting traditional PDF text extraction as fallback...`);
       
       try {
-        const multimodalText = await this.extractTextFromPdfUsingMultimodal(buffer);
-        console.log(`      ✅ Vision extraction successful (${multimodalText.length} chars)`);
-        return multimodalText;
-      } catch (multimodalError) {
-        console.error(`      ❌ Vision extraction failed:`, (multimodalError as Error).message);
-        throw new Error(`Both traditional and vision PDF extraction failed. Traditional: ${(error as Error).message}, Vision: ${(multimodalError as Error).message}`);
+        const traditionalText = await this.extractPdfTextEnhanced(buffer);
+        
+        // Validate quality
+        if (this.validateTextQuality(traditionalText)) {
+          console.log(`      ✅ Traditional extraction successful (${traditionalText.length} chars)`);
+          return traditionalText;
+        }
+        
+        console.log(`      ❌ Traditional extraction quality too poor to use`);
+        throw new Error("Poor text quality from traditional extraction");
+        
+      } catch (traditionalError) {
+        console.error(`      ❌ Both extraction methods failed`);
+        throw new Error(`Both Gemini and traditional PDF extraction failed. Gemini: ${(geminiError as Error).message}, Traditional: ${(traditionalError as Error).message}`);
       }
     }
   }
 
   /**
-   * FIXED: Convert PDF to images and extract text using GPT-4 Vision
+   * Extract text from PDF using Gemini 2.0 Flash - handles both text and visual content
    */
   private async extractTextFromPdfUsingMultimodal(buffer: Buffer): Promise<string> {
     try {
-      console.log(`         📸 Converting PDF pages to images...`);
+      // Convert buffer to base64 for Gemini
+      const base64Pdf = buffer.toString('base64');
+      console.log(`         📄 Processing PDF (${(buffer.length / 1024).toFixed(0)} KB) with Gemini...`);
       
-      const pngPages = await pdfToPng(buffer, {
-        disableFontFace: false,
-        useSystemFonts: true,
-        enableXfa: false,
-        viewportScale: 2.5,
-        outputFileMaskFunc: (pageNumber: number) => `page_${pageNumber}`,
-        pagesToProcess: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // Process first 10 pages
-        verbosityLevel: 0
-      });
-
-      if (!pngPages || pngPages.length === 0) {
-        throw new Error("Failed to convert PDF to images");
-      }
-
-      console.log(`         ✅ Converted ${pngPages.length} pages to images`);
-
-      const pageResults: string[] = [];
-      
-      for (let i = 0; i < pngPages.length; i++) {
-        const page = pngPages[i];
-        console.log(`         🔍 Processing page ${i + 1}/${pngPages.length}...`);
-        
-        try {
-          const pageText = await this.extractTextFromPageImage(page.content, i + 1);
-          
-          if (pageText && pageText.trim().length > 20) {
-            pageResults.push(`=== PAGE ${i + 1} ===\n${pageText.trim()}`);
-            console.log(`         ✅ Page ${i + 1}: ${pageText.length} chars extracted`);
-          } else {
-            console.warn(`         ⚠️  Page ${i + 1}: Insufficient content (${pageText.length} chars)`);
-          }
-        } catch (pageError) {
-          console.warn(`         ❌ Page ${i + 1} failed:`, (pageError as Error).message);
+      // Initialize Gemini model with large output capacity
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-2.0-flash-exp",  // Using the experimental version for better PDF processing
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 8192, // Max tokens for Flash model
         }
-      }
-
-      if (pageResults.length === 0) {
-        throw new Error("No content extracted from any pages");
-      }
-
-      const fullText = pageResults.join('\n\n');
-      console.log(`         ✅ Total extracted: ${fullText.length} characters from ${pageResults.length} pages`);
+      });
       
-      return fullText;
+      const result = await model.generateContent([
+        {
+          inlineData: {
+            mimeType: "application/pdf",
+            data: base64Pdf
+          }
+        },
+        {
+          text: `Extract ALL content from this PDF document - both text AND visual information.
+
+REQUIREMENTS:
+
+1. TEXT EXTRACTION:
+   - Extract all written text exactly as it appears
+   - Maintain document structure: headings, paragraphs, lists, tables
+   - Include ALL pages - do not skip any content
+   - Fix obvious OCR spacing errors (e.g., "F r i d o" → "Frido")
+   - Preserve all data: names, numbers, measurements, specifications
+
+2. VISUAL CONTENT DESCRIPTION:
+   - Describe ALL diagrams, charts, flowcharts, and infographics in detail
+   - Explain what each visual element shows and represents
+   - Capture data from charts (percentages, numbers, trends)
+   - Describe maps with locations and geographic information
+   - Explain organizational charts and hierarchies
+   - Describe process flows and decision trees
+   - Capture information from photos and images with context
+   - Extract table structures completely
+
+3. OUTPUT FORMAT:
+   - Regular text content as-is
+   - After visual elements, add: [VISUAL: detailed description]
+   - Example format:
+
+   Marketing Growth Playbook
+   
+   [VISUAL: Flowchart diagram showing three main stages:
+   
+   1. Problem Awareness (Yellow boxes):
+      - "Talk About the Problem" box
+      - "Own the Problem" box
+      - Connected to "Problem Awareness" banner
+   
+   2. Solution Awareness (Yellow boxes):
+      - "Ads on Meta, Google etc" box
+      - "Influencer/Affiliate Marketing" box
+      - "Sales Across Platforms" box
+      - "Customer Review & Feedback" box
+      - Feedback loop arrow connecting back to stage 1
+   
+   3. Channel Strategy (Beige boxes in flow):
+      Offline Sales → Enhanced Brand Presence → Marketplace → Halo Effect → myfrido.com
+   
+   4. Foundation (Bottom boxes):
+      - "We Own our Design IP" → "From R&D to Production to Commercialization"
+      - "We Own our Marketing IP" → "From Ideating - Planning - Creative - Production"
+      - Both converging to: "Complete Control Over Product Life Cycle"
+   
+   The diagram uses yellow for awareness stages, beige for channel flow, with black text and directional arrows showing the complete marketing ecosystem and feedback mechanisms.]
+
+CRITICAL: 
+- Do NOT skip any visual elements
+- Describe diagrams as if explaining to someone who cannot see them
+- Include all data points from charts and graphs
+- Be comprehensive - this is for knowledge extraction
+
+Output: Complete text extraction with detailed visual descriptions.`
+        }
+      ]);
+
+      const extractedText = result.response.text();
+      
+      if (!extractedText || extractedText.trim().length < 100) {
+        throw new Error('Insufficient text extracted from PDF');
+      }
+
+      console.log(`         ✅ Extracted ${extractedText.length} characters`);
+      
+      return extractedText.trim();
       
     } catch (error) {
-      throw new Error(`Multimodal PDF extraction failed: ${(error as Error).message}`);
+      console.error(`         ❌ Gemini extraction failed:`, error);
+      throw new Error(`Gemini PDF extraction failed: ${(error as Error).message}`);
     }
   }
 
   /**
-   * FIXED: Extract text from a single page image using GPT-4 Vision
+   * DEPRECATED: Old method using GPT-4 Vision - replaced by Gemini 1.5 Pro
+   * Keeping for reference but no longer used
    */
+  /*
   private async extractTextFromPageImage(imageBuffer: Buffer, pageNumber: number): Promise<string> {
     const base64Image = imageBuffer.toString('base64');
     
@@ -1272,6 +1299,7 @@ Remember: TRANSCRIBE ONLY. No descriptions.`
 
     return extractedText.trim();
   }
+  */
 
   /**
    * Retry extraction with even stricter prompt
