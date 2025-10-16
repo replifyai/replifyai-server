@@ -17,13 +17,14 @@ export interface ExpandedQuery {
   normalizedQuery: string;
   detectedProducts: string[];
   expandedQueries: string[];
-  queryType: 'greeting' | 'casual' | 'informational' | 'comparison' | 'specification' | 'unknown';
+  queryType: 'greeting' | 'casual' | 'informational' | 'comparison' | 'specification' | 'catalog' | 'unknown';
   needsRAG: boolean;
   directResponse?: string;
   queryIntent: string;
   searchQueries: string[]; // Multiple search queries for better recall
   isMultiProductQuery: boolean; // Flag for multi-product queries
   comparisonProducts?: string[]; // Products to compare (if comparison query)
+  isProductCatalogQuery?: boolean; // Flag for product catalog/overview queries
 }
 
 export interface QueryExpansionOptions {
@@ -53,8 +54,11 @@ export class AdvancedQueryExpander {
     // Step 2: Normalize query by replacing misspellings with correct product names
     const normalizedQuery = this.normalizeQuery(query, detectedProducts);
 
-    // Step 2.5: Detect if this is a comparison query with multiple products
-    const isComparison = await this.isComparisonQuery(normalizedQuery);
+    // Step 2.5: Detect query type - catalog, comparison, or regular
+    const [isCatalog, isComparison] = await Promise.all([
+      this.isProductCatalogQuery(normalizedQuery),
+      this.isComparisonQuery(normalizedQuery)
+    ]);
     const isMultiProduct = detectedProducts.length > 1;
 
     // Step 3: Classify query type and determine if RAG is needed
@@ -77,9 +81,17 @@ export class AdvancedQueryExpander {
     }
 
     // Step 4: Generate multiple search queries using different perspectives
-    // For comparison queries with multiple products, generate product-specific queries
     let searchQueries: string[];
-    if (isComparison && isMultiProduct) {
+    
+    if (isCatalog) {
+      // For product catalog queries, generate diverse queries to retrieve all products
+      searchQueries = await this.generateCatalogSearchQueries(
+        normalizedQuery,
+        companyContext,
+        maxQueries
+      );
+    } else if (isComparison && isMultiProduct) {
+      // For comparison queries with multiple products
       searchQueries = await this.generateComparisonSearchQueries(
         normalizedQuery,
         detectedProducts,
@@ -87,6 +99,7 @@ export class AdvancedQueryExpander {
         maxQueries
       );
     } else {
+      // For regular informational queries
       searchQueries = await this.generateMultipleSearchQueries(
         normalizedQuery,
         detectedProducts,
@@ -108,13 +121,91 @@ export class AdvancedQueryExpander {
       normalizedQuery,
       detectedProducts,
       expandedQueries,
-      queryType: classification.queryType,
+      queryType: isCatalog ? 'catalog' : classification.queryType,
       needsRAG: true,
       queryIntent: classification.intent,
       searchQueries,
       isMultiProductQuery: isMultiProduct && isComparison,
       comparisonProducts: isComparison && isMultiProduct ? detectedProducts : undefined,
+      isProductCatalogQuery: isCatalog,
     };
+  }
+
+  /**
+   * Check if query is asking for product catalog/overview
+   */
+  private async isProductCatalogQuery(query: string): Promise<boolean> {
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a query classifier. Determine if the user's query is asking for a PRODUCT CATALOG or OVERVIEW of available products.
+
+A product catalog/overview query asks about:
+- What products/types of products are available
+- Product categories or collections
+- Product lineup or range
+- All products offered
+- Product catalog or list
+
+Examples of CATALOG queries:
+- "What type of products does the company offer?"
+- "What products are available?"
+- "Show me your product catalog"
+- "What do you sell?"
+- "What are your product categories?"
+- "List all products"
+- "What's in your product lineup?"
+
+Examples of NON-CATALOG queries:
+- "What are the features of Product A?"
+- "Compare Product A and Product B"
+- "How much does Product A cost?"
+- "Is Product A good for running?"
+
+Respond with ONLY a JSON object:
+{"isCatalog": true} or {"isCatalog": false}`
+          },
+          {
+            role: 'user',
+            content: query
+          }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 20,
+        response_format: { type: "json_object" }
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) return false;
+
+      const parsed = JSON.parse(content);
+      const isCatalog = parsed.isCatalog === true;
+      
+      console.log(`🔍 Catalog Detection: "${query}" → ${isCatalog ? '✅ CATALOG' : '❌ NOT CATALOG'}`);
+      
+      return isCatalog;
+
+    } catch (error) {
+      console.error('❌ Catalog detection failed:', error);
+      // Fallback to keyword-based detection
+      const catalogKeywords = [
+        'what products',
+        'what type of products',
+        'product catalog',
+        'products offer',
+        'products available',
+        'product categories',
+        'product lineup',
+        'what do you sell',
+        'list all products',
+        'show me products'
+      ];
+      const lowerQuery = query.toLowerCase();
+      return catalogKeywords.some(keyword => lowerQuery.includes(keyword));
+    }
   }
 
   /**
@@ -261,6 +352,82 @@ Return JSON:
     });
 
     return allQueries;
+  }
+
+  /**
+   * Generate search queries for product catalog/overview requests
+   */
+  private async generateCatalogSearchQueries(
+    query: string,
+    companyContext?: QueryExpansionOptions['companyContext'],
+    maxQueries: number = 8
+  ): Promise<string[]> {
+    const contextInfo = {
+      companyName: companyContext?.companyName || env.COMPANY_NAME,
+      companyDescription: companyContext?.companyDescription || env.COMPANY_DESCRIPTION,
+      productCategories: companyContext?.productCategories || env.PRODUCT_CATEGORIES,
+    };
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert at generating search queries for product catalog overview.
+The user wants to know about ALL products and product types offered by the company.
+
+Context:
+- Company: ${contextInfo.companyName}
+- Description: ${contextInfo.companyDescription}
+- Product Categories: ${contextInfo.productCategories}
+
+Generate ${maxQueries} diverse search queries that will help retrieve information about ALL different products and categories.
+
+Guidelines:
+1. Include queries for product categories and types
+2. Include queries for product lineup and collections
+3. Include specific product name queries for known products
+4. Include feature-based queries that span multiple products
+5. Include benefit/use-case queries that cover different products
+6. Vary the query structure to maximize coverage
+
+Examples:
+- "product categories lineup collection"
+- "all products available orthopedic medical"
+- "foot care products ball metatarsal heel arch support"
+- "insoles cushions pads gel silicone products"
+- "[specific product name] features specifications"
+
+Return JSON:
+{
+  "queries": ["query1", "query2", "query3", ...]
+}`
+          },
+          { role: "user", content: query },
+        ],
+        max_completion_tokens: 800,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content || '{"queries": []}';
+      const result = JSON.parse(content);
+      
+      console.log(`📚 Generated ${result.queries?.length || 0} catalog search queries`);
+      
+      return result.queries || [query];
+    } catch (error) {
+      console.error('Error generating catalog queries:', error);
+      // Fallback queries for catalog
+      return [
+        "all products product categories types",
+        "product lineup collection catalog",
+        "foot care orthopedic medical products",
+        "insoles cushions pads gel products",
+        "arch support heel pain relief products",
+        query
+      ];
+    }
   }
 
   /**

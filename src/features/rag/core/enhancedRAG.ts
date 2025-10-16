@@ -163,8 +163,18 @@ export class EnhancedRAGService {
       const retrievalStart = Date.now();
       let allRetrievedChunks: SearchResult[];
       
-      // For multi-product comparison queries, retrieve chunks for each product
-      if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
+      // Handle different query types with appropriate retrieval strategies
+      if (expandedQuery.isProductCatalogQuery) {
+        console.log(`\n📚 Product Catalog Query Mode`);
+        console.log(`  - Retrieving diverse product information`);
+        
+        // For catalog queries, increase retrieval count and lower threshold to get diverse results
+        allRetrievedChunks = await this.catalogRetrieval(
+          expandedQuery.searchQueries,
+          Math.max(retrievalCount * 2, 50), // Get more chunks for catalog queries
+          Math.min(similarityThreshold, 0.4) // Lower threshold for broader coverage
+        );
+      } else if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
         console.log(`\n🔄 Multi-Product Comparison Mode`);
         console.log(`  - Products: ${expandedQuery.comparisonProducts.join(' vs ')}`);
         
@@ -303,8 +313,16 @@ export class EnhancedRAGService {
       const genStart = Date.now();
       let responseData;
       
-      // Use comparison-specific generation for multi-product queries
-      if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
+      // Choose appropriate generation strategy based on query type
+      if (expandedQuery.isProductCatalogQuery) {
+        // Use catalog-specific generation for product overview queries
+        responseData = await this.generateCatalogResponse(
+          expandedQuery.normalizedQuery,
+          finalChunks,
+          formatAsMarkdown
+        );
+      } else if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
+        // Use comparison-specific generation for multi-product queries
         responseData = await this.generateComparisonResponse(
           expandedQuery.normalizedQuery,
           finalChunks,
@@ -348,6 +366,67 @@ export class EnhancedRAGService {
       console.error("❌ Enhanced RAG query failed:", error);
       throw new Error(`Failed to process query: ${error.message}`);
     }
+  }
+
+  /**
+   * Catalog retrieval - retrieve diverse chunks covering all products
+   */
+  private async catalogRetrieval(
+    searchQueries: string[],
+    retrievalCount: number,
+    similarityThreshold: number
+  ): Promise<SearchResult[]> {
+    console.log(`📚 Catalog retrieval with ${searchQueries.length} queries`);
+    
+    // Create embeddings for all queries in batch
+    const queryEmbeddings = await createBatchEmbeddings(searchQueries);
+    
+    // Use a Map to track unique products and their best chunks
+    const productChunks = new Map<string, SearchResult[]>();
+    const seenChunkIds = new Set<number>();
+    
+    for (let i = 0; i < searchQueries.length; i++) {
+      const query = searchQueries[i];
+      const embedding = queryEmbeddings[i];
+      
+      // Search without product filter to get diverse results
+      const results = await qdrantService.searchSimilar(
+        embedding,
+        retrievalCount,
+        similarityThreshold,
+        undefined // No product filter for catalog queries
+      );
+      
+      // Group results by product
+      for (const result of results) {
+        if (seenChunkIds.has(result.chunkId)) continue;
+        
+        const productName = result.metadata?.productName || 'general';
+        
+        if (!productChunks.has(productName)) {
+          productChunks.set(productName, []);
+        }
+        
+        const chunks = productChunks.get(productName)!;
+        // Keep top 3 chunks per product to ensure diversity
+        if (chunks.length < 3) {
+          chunks.push(result);
+          seenChunkIds.add(result.chunkId);
+        }
+      }
+    }
+    
+    // Flatten the results, ensuring we have representation from multiple products
+    const allResults: SearchResult[] = [];
+    for (const [productName, chunks] of productChunks) {
+      console.log(`  - Product "${productName}": ${chunks.length} chunks`);
+      allResults.push(...chunks);
+    }
+    
+    console.log(`📚 Total unique products found: ${productChunks.size}`);
+    console.log(`📚 Total chunks retrieved: ${allResults.length}`);
+    
+    return allResults;
   }
 
   /**
@@ -678,6 +757,104 @@ ${organizedContext}`;
       .replace(/\\n/g, '\n') // Convert literal \n to actual newlines
       .replace(/ +/g, ' ') // Collapse multiple spaces within lines
       .replace(/\n{3,}/g, '\n\n') // Collapse 3+ consecutive newlines to max 2
+      .trim();
+
+    return { response: cleanResponse, usedChunkIds };
+  }
+
+  /**
+   * Generate catalog/overview response for product listing queries
+   */
+  private async generateCatalogResponse(
+    query: string,
+    contextChunks: Array<{ id: string; content: string; originalData: any }>,
+    formatAsMarkdown: boolean = false
+  ): Promise<{ response: string; usedChunkIds: string[] }> {
+    // Group chunks by product to understand what products are available
+    const productInfo = new Map<string, Array<{ id: string; content: string }>>();
+    
+    for (const chunk of contextChunks) {
+      const productName = chunk.originalData.metadata?.productName || 'General Information';
+      if (!productInfo.has(productName)) {
+        productInfo.set(productName, []);
+      }
+      productInfo.get(productName)!.push({ id: chunk.id, content: chunk.content });
+    }
+
+    console.log(`📚 Generating catalog response for ${productInfo.size} products`);
+
+    const responseFormat = formatAsMarkdown
+      ? `CATALOG FORMAT - MARKDOWN:
+- Use proper Markdown formatting with headers and structure
+- Start with "## Product Overview" or "## Our Product Lineup"
+- List each product/category with a brief description
+- Use bullet points or numbered lists for clear organization
+- Include key features and benefits for each product
+- Use bold for product names: **Product Name**
+- Add sections like "## Product Categories" if multiple categories exist`
+      : `CATALOG FORMAT - PLAIN TEXT:
+- Write in PLAIN TEXT only - NO markdown symbols
+- Start with "Product Overview" or "Our Product Lineup"
+- List each product/category with a brief description
+- Use simple bullet points "-" for organization
+- Include key features and benefits for each product
+- Keep formatting clean and readable`;
+
+    const systemPrompt = `You are an AI assistant providing a comprehensive product catalog overview.
+
+QUERY: ${query}
+
+CRITICAL INSTRUCTIONS:
+1. Provide a COMPLETE overview of ALL products/categories found in the context
+2. List each distinct product or product type with its key characteristics
+3. Use ONLY the provided context - never use external knowledge
+4. Organize products logically (by category, type, or use case)
+5. Include brief descriptions of what each product is for
+6. If you find multiple products, list them ALL
+7. Cite chunks using [USED_CHUNK: chunk_id] after each statement
+
+IMPORTANT: This is a catalog/overview query. The user wants to know about ALL available products, not just one.
+
+${responseFormat}
+
+Products found in context (${productInfo.size} distinct products):
+${Array.from(productInfo.keys()).join(', ')}
+
+Context from documents:
+${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
+
+    const responseText = await inferenceProvider.chatCompletion(
+      systemPrompt,
+      query,
+      { temperature: 0.1, maxTokens: 1500 }
+    );
+
+    // Extract used chunk IDs
+    const usedChunkIds: string[] = [];
+    const chunkIdPatterns = [
+      /\[USED_CHUNK:\s*([^\]]+)\]/gi,
+      /\[CHUNK_ID:\s*([^\]]+)\]/gi,
+    ];
+
+    chunkIdPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(responseText)) !== null) {
+        const chunkIdString = match[1];
+        const individualIds = chunkIdString.split(',').map(id => id.trim());
+        individualIds.forEach(id => {
+          if (id && !usedChunkIds.includes(id)) {
+            usedChunkIds.push(id);
+          }
+        });
+      }
+    });
+
+    // Clean response - remove citation markers and format properly
+    const cleanResponse = responseText
+      .replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*[^\]]+\]/gi, '')
+      .replace(/\\n/g, '\n')
+      .replace(/ +/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
 
     return { response: cleanResponse, usedChunkIds };
