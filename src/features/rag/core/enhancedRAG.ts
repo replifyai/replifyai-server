@@ -400,6 +400,8 @@ export class EnhancedRAGService {
     retrievalCount: number,
     similarityThreshold: number
   ): Promise<SearchResult[]> {
+    console.log("🚀 ~ EnhancedRAGService ~ multiProductRetrieval ~ products:", products);
+    console.log("🚀 ~ EnhancedRAGService ~ multiProductRetrieval ~ searchQueries:", searchQueries);
 
     const allResults: SearchResult[] = [];
     const seenChunkIds = new Set<number>();

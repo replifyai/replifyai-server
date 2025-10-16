@@ -18,6 +18,7 @@
     "create-qdrant-index": "tsx scripts/create-qdrant-index.ts"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@neondatabase/serverless": "^0.10.4",
     "@qdrant/js-client-rest": "^1.15.0",
     "@types/multer": "^1.4.13",
@@ -44,6 +45,7 @@
     "passport-local": "^1.0.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
+    "pdf-to-png-converter": "^3.10.0",
     "pdf2json": "^3.1.6",
     "pdfjs-dist": "^5.3.31",
     "sharp": "^0.34.2",
