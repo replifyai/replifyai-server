@@ -14,9 +14,19 @@
 import { advancedQueryExpander, ExpandedQuery } from "../components/advancedQueryExpander.js";
 import { reranker, RankedResult } from "../components/reranker.js";
 import { contextualCompressor, CompressedChunk } from "../components/contextualCompressor.js";
-import { createEmbedding, createBatchEmbeddings } from "../providers/embeddingService.js";
-import { qdrantService, SearchResult } from "../providers/qdrantHybrid.js";
+import { qdrantService } from "../providers/qdrantHybrid.js";
+import { googleRAGService } from "../providers/googleRAG.js";
+import { VectorStoreProvider, SearchResult } from "../providers/types.js";
 import { inferenceProvider } from "../../../services/llm/inference.js";
+import { env } from "../../../env.js";
+
+function getProvider(): VectorStoreProvider {
+  if (env.RAG_PROVIDER === 'google') {
+    return googleRAGService;
+  }
+  return qdrantService;
+}
+
 export interface EnhancedRAGOptions {
   retrievalCount?: number;
   similarityThreshold?: number;
@@ -274,7 +284,6 @@ export class EnhancedRAGService {
           content: `[CHUNK_ID: chunk_${index}] [From: ${rankedChunks.find(r => r.chunkId === chunk.originalChunkId)?.filename || 'unknown'}]\n${chunk.compressedContent}`,
           originalData: rankedChunks.find(r => r.chunkId === chunk.originalChunkId)!,
         }));
-
       } else {
         // No compression, use top ranked chunks
         finalChunks = rankedChunks.slice(0, finalChunkCount).map((chunk, index) => ({
@@ -378,20 +387,16 @@ export class EnhancedRAGService {
   ): Promise<SearchResult[]> {
     console.log(`📚 Catalog retrieval with ${searchQueries.length} queries`);
     
-    // Create embeddings for all queries in batch
-    const queryEmbeddings = await createBatchEmbeddings(searchQueries);
-    
     // Use a Map to track unique products and their best chunks
     const productChunks = new Map<string, SearchResult[]>();
-    const seenChunkIds = new Set<number>();
+    const seenChunkIds = new Set<number | string>();
     
     for (let i = 0; i < searchQueries.length; i++) {
       const query = searchQueries[i];
-      const embedding = queryEmbeddings[i];
       
       // Search without product filter to get diverse results
-      const results = await qdrantService.searchSimilar(
-        embedding,
+      const results = await getProvider().searchSimilar(
+        query,
         retrievalCount,
         similarityThreshold,
         undefined // No product filter for catalog queries
@@ -439,19 +444,15 @@ export class EnhancedRAGService {
     similarityThreshold: number
   ): Promise<SearchResult[]> {
 
-    // Create embeddings for all queries in batch
-    const queryEmbeddings = await createBatchEmbeddings(searchQueries);
-
     // Search with each query embedding
     const allResults: SearchResult[] = [];
-    const seenChunkIds = new Set<number>();
+    const seenChunkIds = new Set<number | string>();
 
     for (let i = 0; i < searchQueries.length; i++) {
       const query = searchQueries[i];
-      const embedding = queryEmbeddings[i];
 
-      const results = await qdrantService.searchSimilar(
-        embedding,
+      const results = await getProvider().searchSimilar(
+        query,
         retrievalCount,
         similarityThreshold,
         productName
@@ -483,23 +484,19 @@ export class EnhancedRAGService {
     console.log("🚀 ~ EnhancedRAGService ~ multiProductRetrieval ~ searchQueries:", searchQueries);
 
     const allResults: SearchResult[] = [];
-    const seenChunkIds = new Set<number>();
+    const seenChunkIds = new Set<number | string>();
 
     // Group queries by product (queries should have product names in them)
     const queryGroups = this.groupQueriesByProduct(searchQueries, products);
 
     // Retrieve chunks for each product
     for (const [product, productQueries] of Object.entries(queryGroups)) {
-      // Create embeddings for this product's queries
-      const embeddings = await createBatchEmbeddings(productQueries);
-
       // Search with each query
       for (let i = 0; i < productQueries.length; i++) {
         const query = productQueries[i];
-        const embedding = embeddings[i];
 
-        const results = await qdrantService.searchSimilar(
-          embedding,
+        const results = await getProvider().searchSimilar(
+          query,
           retrievalCount,
           similarityThreshold,
           product // Filter by specific product
@@ -588,25 +585,25 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
 
     const systemPrompt = `You are an AI assistant helping users find information about products.
     
-QUERY: ${query}
-
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context - never use external knowledge
-2. If context has both relevant and conflicting details, provide only relevant ones
-3. If the exact answer is missing, say: "I don't have enough information to answer this question."
-4. Never mention "chunk", "document", "source", or "context" in your response
-5. Answer with confidence and clarity
-6. Be comprehensive and cover all relevant aspects from the context
-
-CITATION RULES:
-- MUST cite chunks using [USED_CHUNK: chunk_id] after each statement
-- Cite multiple chunks if information comes from multiple sources
-- Every factual statement must have a citation
-
-${responseFormat}
-
-Context from documents:
-${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
+    QUERY: ${query}
+    
+    CRITICAL INSTRUCTIONS:
+    1. Use ONLY the provided context - never use external knowledge
+    2. If context has both relevant and conflicting details, provide only relevant ones
+    3. If the exact answer is missing, say: "I don't have enough information to answer this question."
+    4. Never mention "chunk", "document", "source", or "context" in your response
+    5. Answer with confidence and clarity
+    6. Be comprehensive and cover all relevant aspects from the context
+    
+    CITATION RULES:
+    - MUST cite chunks using [USED_CHUNK: chunk_id] after each statement
+    - Cite multiple chunks if information comes from multiple sources
+    - Every factual statement must have a citation
+    
+    ${responseFormat}
+    
+    Context from documents:
+    ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
     const responseText = await inferenceProvider.chatCompletion(
       systemPrompt,
@@ -1004,4 +1001,3 @@ IMPORTANT: Cite chunks using [USED_CHUNK: chunk_id]`;
 }
 
 export const enhancedRAGService = new EnhancedRAGService();
-

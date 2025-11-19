@@ -5,6 +5,8 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { env } from "../../../env.js";
 import { randomUUID } from 'crypto';
+import { VectorStoreProvider, SearchResult } from './types.js';
+import { Document } from '../../../shared/schema.js';
 
 // Business logic interfaces - keep existing
 export interface QdrantPoint {
@@ -17,15 +19,6 @@ export interface QdrantPoint {
     filename: string;
     metadata?: any;
   };
-}
-
-export interface SearchResult {
-  chunkId: number;
-  documentId: number;
-  content: string;
-  filename: string;
-  score: number;
-  metadata?: any;
 }
 
 class QdrantCloudService {
@@ -340,24 +333,31 @@ class QdrantCloudService {
   }
 
   async searchSimilar(
-    queryVector: number[], 
+    queryVector: number[] | string, // Allow string for potential future compatibility, though Qdrant needs number[]
     limit: number = 10, 
     scoreThreshold: number = 0.6,
     productName?: string
   ): Promise<SearchResult[]> {
     
     try {
+      let vector: number[];
+      if (typeof queryVector === 'string') {
+        throw new Error('Qdrant requires vector embeddings, not raw text string');
+      } else {
+        vector = queryVector;
+      }
+
       console.log(`Searching for similar vectors (limit: ${limit}, threshold: ${scoreThreshold})`);
       this.operationStats.searches++;
       
       // Validate query vector
-      if (!queryVector || !Array.isArray(queryVector) || queryVector.length !== 4096) {
+      if (!vector || !Array.isArray(vector) || vector.length !== 4096) {
         throw new Error('Invalid query vector: expected 4096 dimensions');
       }
       
       // Prepare search parameters
       const searchParams: any = {
-        vector: queryVector,
+        vector: vector,
         with_vector: false,
         with_payload: true,
         score_threshold: .5,
@@ -453,7 +453,8 @@ class QdrantCloudService {
   }
 }
 
-export class QdrantService {
+export class QdrantService implements VectorStoreProvider {
+  name = "qdrant";
   private cloudService: QdrantCloudService;
 
   constructor() {
@@ -464,20 +465,63 @@ export class QdrantService {
     await this.cloudService.ensureCollection();
   }
 
+  async addDocument(document: Document, fileBuffer: Buffer, chunks: any[]): Promise<void> {
+    // For Qdrant, we expect chunks to be provided as QdrantPoint[]
+    // This maintains backward compatibility with documentProcessor
+    if (chunks && chunks.length > 0) {
+        await this.addPoints(chunks);
+    }
+  }
+
   async addPoints(points: QdrantPoint[]): Promise<void> {
     await this.cloudService.addPoints(points);
   }
 
   async searchSimilar(
-    queryVector: number[], 
+    query: string | number[], 
     limit: number = 10, 
     scoreThreshold: number = 0.7,
     productName?: string
   ): Promise<SearchResult[]> {
-    return await this.cloudService.searchSimilar(queryVector, limit, scoreThreshold, productName);
+      // Qdrant needs vector, but the interface allows string (for Google). 
+      // If string is passed, we assume the caller will handle embedding generation OR
+      // we should have handled it. However, in current architecture, embeddings are generated before calling search.
+      // But wait, GoogleRAGService takes string. 
+      // So to make them interchangeable, QdrantService should ideally take string and generate embedding itself?
+      // OR RAGService should handle embedding generation if needed.
+      
+      // Currently RAGService generates embedding and passes it to qdrantService.searchSimilar.
+      // But GoogleRAGService expects string.
+      
+      // To support both, RAGService should pass string, and QdrantService should embed it?
+      // Or we pass both? Or overload?
+      // VectorStoreProvider definition says `searchSimilar(query: string, ...)`
+      
+      // If I change VectorStoreProvider to take string, QdrantService needs to embed it.
+      // I should check if QdrantService has access to embedding service.
+      
+      if (typeof query === 'string') {
+        // We need to generate embedding here if we want to support string query
+        // Circular dependency potential if we import createEmbedding here?
+        // Let's import it dynamically or assume the interface allows number[] too (which I did in my edit above to QdrantCloudService)
+        // But VectorStoreProvider defined in types.ts says `query: string`.
+        
+        // I'll modify types.ts to allow `query: string | number[]` or handle embedding here.
+        // Handling embedding here is cleaner for the consumer.
+        const { createEmbedding } = await import('./embeddingService.js');
+        const embedding = await createEmbedding(query);
+        return await this.cloudService.searchSimilar(embedding, limit, scoreThreshold, productName);
+      }
+
+    return await this.cloudService.searchSimilar(query, limit, scoreThreshold, productName);
   }
 
   async deleteByDocumentId(documentId: string): Promise<void> {
+    // Qdrant implementation seemed to use productName as documentId in the delete method?
+    // The code says: async deleteByDocumentId(productName: string): Promise<void>
+    // And logs: console.log("🚀 Deleting by productName:", productName);
+    // This seems to be a semantic mismatch in the existing code.
+    // I will pass it through.
     await this.cloudService.deleteByDocumentId(documentId);
   }
 

@@ -4,6 +4,7 @@ import multer from "multer";
 import { storage } from "./storage.js";
 import { documentProcessor } from "./features/upload/documentProcessor.js";
 import { ragService } from "./features/rag/core/ragService.js";
+import { vectorStore } from "./features/rag/providers/index.js";
 import { batchUploadService } from "./features/upload/batchUploadService.js";
 import { insertSettingSchema } from "../shared/schema.js";
 import { env } from "./env.js";
@@ -192,7 +193,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
-        await storage.deleteDocument(document.id);
+        if (vectorStore.name !== 'google') {
+          await storage.deleteDocument(document.id);
+        }
         res.json(processedDocument);
       } catch (processingError) {
         console.error(`Failed to process document ${document.id}:`, processingError);
@@ -248,7 +251,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
-        await storage.deleteDocument(document.id);
+        if (vectorStore.name !== 'google') {
+          await storage.deleteDocument(document.id);
+        }
         res.json(processedDocument);
       } catch (processingError) {
         // If processing fails, return error with document info

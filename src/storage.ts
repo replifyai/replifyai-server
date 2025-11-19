@@ -7,6 +7,7 @@ export interface IStorage {
   getAllDocuments(): Promise<Document[]>;
   updateDocumentStatus(id: number, status: string, processedAt?: Date): Promise<void>;
   updateDocumentChunkCount(id: number, chunkCount: number): Promise<void>;
+  updateDocumentMetadata(id: number, metadata: Record<string, any>): Promise<void>;
   deleteDocument(id: number): Promise<void>;
 
   // Chunk operations
@@ -100,6 +101,18 @@ export class MemStorage implements IStorage {
     const document = this.documents.get(id);
     if (document) {
       document.chunkCount = chunkCount;
+      this.documents.set(id, document);
+    }
+  }
+
+  async updateDocumentMetadata(id: number, metadata: Record<string, any>): Promise<void> {
+    const document = this.documents.get(id);
+    if (document) {
+      const currentMetadata = (document.metadata as Record<string, any>) || {};
+      document.metadata = {
+        ...currentMetadata,
+        ...metadata,
+      };
       this.documents.set(id, document);
     }
   }

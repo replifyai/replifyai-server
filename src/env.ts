@@ -33,6 +33,9 @@ export const env = {
   // Embedding Provider selection
   EMBEDDING_PROVIDER: process.env.EMBEDDING_PROVIDER || 'openai',
 
+  // RAG Provider selection
+  RAG_PROVIDER: process.env.RAG_PROVIDER || 'qdrant', // 'qdrant' or 'google'
+
   // Nebius Studio (OpenAI-compatible)
   NEBIUS_API_KEY: process.env.NEBIUS_API_KEY || '',
   NEBIUS_BASE_URL: process.env.NEBIUS_BASE_URL || '',

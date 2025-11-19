@@ -1,6 +1,6 @@
 import { createEmbedding } from "../rag/providers/embeddingService.js";
 import { extractDocumentMetadata } from "../../services/llm/openai.js";
-import { qdrantService } from "../rag/providers/qdrantHybrid.js";
+import { vectorStore } from "../rag/providers/index.js";
 import { storage } from "../../storage.js";
 import type { Document } from "../../../shared/schema.js";
 import mammoth from "mammoth";
@@ -87,6 +87,21 @@ export class DocumentProcessor {
 
       // Update status to processing
       await storage.updateDocumentStatus(document.id, "processing");
+
+      // Check if we are using Google RAG - if so, skip local chunking/embedding
+      if (vectorStore.name === 'google') {
+        console.log(`🚀 Using Google RAG Provider - skipping local chunking and embedding`);
+        console.log(`📤 Uploading file directly to Google AI...`);
+        
+        await vectorStore.addDocument(document, fileBuffer, []);
+        
+        await storage.updateDocumentStatus(document.id, "indexed", new Date());
+        
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`✅ SUCCESSFULLY PROCESSED WITH GOOGLE RAG: ${document.originalName}`);
+        console.log(`${'='.repeat(80)}\n`);
+        return;
+      }
 
       // Extract text with enhanced extraction
       console.log(`📖 Step 1: Extracting text from ${document.fileType.toUpperCase()} file...`);
@@ -238,8 +253,8 @@ export class DocumentProcessor {
 
       console.log(`✅ Created ${vectorChunks.length} vector chunks with embeddings`);
 
-      // Add to vector database
-      await qdrantService.addPoints(vectorChunks);
+      // Add to vector database using the unified provider
+      await vectorStore.addDocument(document, fileBuffer, vectorChunks);
       
       console.log(`\n💾 Step 8: Updating document status...`);
       await storage.updateDocumentStatus(document.id, "indexed", new Date());
@@ -1206,102 +1221,6 @@ Output: Complete text extraction with detailed visual descriptions.`
   }
 
   /**
-   * DEPRECATED: Old method using GPT-4 Vision - replaced by Gemini 1.5 Pro
-   * Keeping for reference but no longer used
-   */
-  /*
-  private async extractTextFromPageImage(imageBuffer: Buffer, pageNumber: number): Promise<string> {
-    const base64Image = imageBuffer.toString('base64');
-    
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Vision extraction timeout')), 60000);
-    });
-    
-    const visionPromise = openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You are a precise OCR transcription tool. Your ONLY job is to extract text from images.
-
-STRICT RULES:
-1. Extract ONLY the actual text visible in the image
-2. Copy text EXACTLY as written - do not paraphrase or summarize
-3. DO NOT describe visual elements, colors, layouts, or designs
-4. DO NOT add commentary like "the image shows" or "this page contains"
-5. DO NOT infer or create information not explicitly written
-6. Maintain original formatting: headings, paragraphs, lists, tables
-7. Fix obvious OCR spacing errors (e.g., "F r i d o" → "Frido")
-8. Preserve all numbers, measurements, and technical data exactly
-9. Include page headers/footers only if they contain actual content
-
-OUTPUT FORMAT:
-Return ONLY the extracted text. No preamble, no analysis, no descriptions.
-Just pure text transcription.
-
-EXAMPLES:
-✓ CORRECT: "FRIDO EXPERIENCE STORE\nBY ARCATRON MOBILITY\n\nYour guide to..."
-✗ WRONG: "The page shows a title 'Frido Experience Store' with yellow branding..."
-✗ WRONG: "This is a handbook cover featuring..."
-
-Remember: TRANSCRIBE ONLY. No descriptions.`
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Extract all text from this page image. Output only the text, nothing else.`
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/png;base64,${base64Image}`,
-                detail: "high"
-              }
-            }
-          ]
-        }
-      ],
-      max_tokens: 4000,
-      temperature: 0.0
-    });
-
-    const response = await Promise.race([visionPromise, timeoutPromise]);
-    const extractedText = response.choices[0]?.message?.content;
-    
-    if (!extractedText) {
-      throw new Error("No content returned from vision model");
-    }
-
-    // Check for hallucination indicators
-    const lowerText = extractedText.toLowerCase();
-    const hallucinationPhrases = [
-      'the image shows',
-      'the page shows',
-      'this page contains',
-      'there is a',
-      'we can see',
-      'the document displays',
-      'visual elements include',
-      'the layout features',
-      'at the top',
-      'on the left',
-      'on the right'
-    ];
-    
-    const hasHallucination = hallucinationPhrases.some(phrase => lowerText.includes(phrase));
-    
-    if (hasHallucination) {
-      console.warn(`            ⚠️  Possible description detected in page ${pageNumber}, retrying...`);
-      return await this.retryExtractionWithStrictPrompt(imageBuffer, pageNumber);
-    }
-
-    return extractedText.trim();
-  }
-  */
-
-  /**
    * Retry extraction with even stricter prompt
    */
   private async retryExtractionWithStrictPrompt(imageBuffer: Buffer, pageNumber: number): Promise<string> {
@@ -1379,7 +1298,7 @@ Output: Pure text transcription.`
   }
 
   async deleteDocumentFromVector(documentId: string): Promise<void> {
-    await qdrantService.deleteByDocumentId(documentId);
+    await vectorStore.deleteByDocumentId(documentId);
   }
 
   /**

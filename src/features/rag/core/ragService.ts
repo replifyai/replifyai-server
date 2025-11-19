@@ -1,10 +1,12 @@
 import { createEmbedding } from "../providers/embeddingService.js";
-import { qdrantService } from "../providers/qdrantHybrid.js";
+import { vectorStore } from "../providers/index.js";
 import { storage } from "../../../storage.js";
 import { inferenceProvider } from "../../../services/llm/inference.js";
 import { openai } from "../../../services/llm/openai.js";
 import { env } from "../../../env.js";
 import { enhancedRAGService, EnhancedRAGOptions } from "./enhancedRAG.js";
+import { VectorStoreProvider } from "../providers/types.js";
+
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
   suggestedTopics: string[];
@@ -28,6 +30,11 @@ export interface RAGResponse {
 }
 
 export class RAGService {
+  
+  getProvider(): VectorStoreProvider {
+    return vectorStore;
+  }
+
   /**
    * 🚀 NEW: Enhanced RAG query with production-grade features
    * - Fuzzy product name matching
@@ -193,12 +200,11 @@ Examples:
         };
       }
       
-      // Create embedding for the query
-      const queryEmbedding = await createEmbedding(queryAnalysis.expandedQuery || query);
-
       // Search for similar chunks
-      const searchResults = await qdrantService.searchSimilar(
-        queryEmbedding,
+      // For Google RAG, expandedQuery might be less useful than raw query + context, but let's try expanded first or just query.
+      // vectorStore.searchSimilar usually expects a string query (handled internally by Google or via embedding by QdrantService wrapper)
+      const searchResults = await vectorStore.searchSimilar(
+        queryAnalysis.expandedQuery || query,
         retrievalCount,
         similarityThreshold,
         productName
@@ -221,7 +227,7 @@ Examples:
         };
       }
 
-      // Since we already have product-specific chunks from Qdrant, just sort by similarity score
+      // Since we already have product-specific chunks from Qdrant/Google, just sort by similarity score
       const sortedChunks = searchResults
         .sort((a, b) => b.score - a.score);
 
@@ -352,18 +358,18 @@ Examples:
     
     ANSWERING RULES:
 
-Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
-[USED_CHUNK: chunk_id]
+    Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
+    [USED_CHUNK: chunk_id]
 
-IMPORTANT: You MUST cite at least one chunk for your answer. If you use information from multiple chunks, cite each one.
+    IMPORTANT: You MUST cite at least one chunk for your answer. If you use information from multiple chunks, cite each one.
 
-Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
+    Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
 
-Structured Response: Present answers in multiple sentences or bullet points, not a single line, so the response is detailed yet clear.
+    Structured Response: Present answers in multiple sentences or bullet points, not a single line, so the response is detailed yet clear.
 
-Separation of Sources: If multiple chunks or documents provide overlapping or differing details, present them clearly under separate points, explicitly identifying their sources.
+    Separation of Sources: If multiple chunks or documents provide overlapping or differing details, present them clearly under separate points, explicitly identifying their sources.
 
-Conciseness with Depth: Be concise but ensure the response captures every relevant property mentioned in the context.
+    Conciseness with Depth: Be concise but ensure the response captures every relevant property mentioned in the context.
     
     Context from uploaded documents:  
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}
@@ -514,7 +520,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
 
   async getQdrantStatus(): Promise<any> {
     try {
-      return await qdrantService.getCollectionInfo();
+      return await vectorStore.getCollectionInfo();
     } catch (error: any) {
       return { status: "error", message: error.message };
     }
@@ -531,10 +537,8 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
   } = {}): Promise<RAGResponse> {
     const { retrievalCount = 20, similarityThreshold = 0.75, productName = "" } = options;
     try {
-      const queryEmbedding = await createEmbedding(query);
-
-      const searchResults = await qdrantService.searchSimilar(
-        queryEmbedding,
+      const searchResults = await vectorStore.searchSimilar(
+        query,
         retrievalCount,
         similarityThreshold,
         productName
