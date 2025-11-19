@@ -2,6 +2,7 @@
  * Product Catalog Service
  * Maintains a list of all products and provides fuzzy matching capabilities
  */
+import axios from 'axios';
 
 export interface Product {
   id: string;
@@ -9,84 +10,71 @@ export interface Product {
   aliases?: string[]; // Alternative names or common misspellings
 }
 
-export const FRIDO_PRODUCTS: Product[] = [
-  { id: "Frido 3D Posture Plus Ergonomic Chair", name: "Frido 3D Posture Plus Ergonomic Chair", aliases: ["3D Posture Chair", "Posture Plus Chair"] },
-  { id: "Frido Active Socks Product Description", name: "Frido Active Socks Product Description", aliases: ["Active Socks", "Frido Socks"] },
-  { id: "Frido AeroMesh Ergo Chair", name: "Frido AeroMesh Ergo Chair", aliases: ["AeroMesh Chair", "Aero Mesh Chair"] },
-  { id: "Frido Aeroluxe Massage Chair", name: "Frido Aeroluxe Massage Chair", aliases: ["Aeroluxe Chair", "Massage Chair"] },
-  { id: "Frido Arch Sports Insole", name: "Frido Arch Sports Insole", aliases: ["Arch Insole", "Sports Insole"] },
-  { id: "Frido Arch Support Insole - Rigid", name: "Frido Arch Support Insole - Rigid", aliases: ["Rigid Arch Support", "Rigid Insole"] },
-  { id: "Frido Arch Support Insoles - Semi Rigid", name: "Frido Arch Support Insoles - Semi Rigid", aliases: ["Semi Rigid Arch Support", "Semi Rigid Insole"] },
-  { id: "Frido Ball of Foot Cushion Pro", name: "Frido Ball of Foot Cushion Pro", aliases: ["Ball Cushion Pro", "Foot Cushion Pro"] },
-  { id: "Frido Barefoot Sock Shoe Classic", name: "Frido Barefoot Sock Shoe Classic", aliases: ["Barefoot Shoe", "Sock Shoe"] },
-  { id: "Frido Cervical Butterfly pillow", name: "Frido Cervical Butterfly pillow", aliases: ["Cervical Pillow", "Butterfly Pillow"] },
-  { id: "Frido Cloud Back Rest Cushion", name: "Frido Cloud Back Rest Cushion", aliases: ["Cloud Backrest", "Back Rest Cushion"] },
-  { id: "Frido Cloud Seat Cushion", name: "Frido Cloud Seat Cushion", aliases: ["Cloud Cushion", "Cloud Seat"] },
-  { id: "Frido Cuddle Sleep Pillow", name: "Frido Cuddle Sleep Pillow", aliases: ["Cuddle Pillow", "Sleep Pillow"] },
-  { id: "Frido Dual Gel Insoles", name: "Frido Dual Gel Insoles", aliases: ["Gel Insoles", "Dual Gel"] },
-  { id: "Frido Dual Gel Insoles Pro", name: "Frido Dual Gel Insoles Pro", aliases: ["Gel Insoles Pro", "Dual Gel Pro"] },
-  { id: "Frido Glide Ergo Chair", name: "Frido Glide Ergo Chair", aliases: ["Glide Chair", "Ergo Chair"] },
-  { id: "Frido Knee Pillow", name: "Frido Knee Pillow", aliases: ["Knee Support Pillow"] },
-  { id: "Frido Leg Elevation Pillow", name: "Frido Leg Elevation Pillow", aliases: ["Leg Pillow", "Elevation Pillow"] },
-  { id: "Frido Lumbo Sacral Belt", name: "Frido Lumbo Sacral Belt", aliases: ["Lumbar Belt", "Back Support Belt"] },
-  { id: "Frido Maternity Pillow", name: "Frido Maternity Pillow", aliases: ["Pregnancy Pillow"] },
-  { id: "Frido Max Comfort Hi-Per Foam Insoles", name: "Frido Max Comfort Hi-Per Foam Insoles", aliases: ["Max Comfort Insoles", "Foam Insoles"] },
-  { id: "Frido Mini Car Neck Pillow", name: "Frido Mini Car Neck Pillow", aliases: ["Car Neck Pillow Mini", "Mini Neck Pillow"] },
-  { id: "Frido Mouse Wrist Support", name: "Frido Mouse Wrist Support", aliases: ["Wrist Support", "Mouse Pad Wrist"] },
-  { id: "Frido Ortho Memory Foam Pillow", name: "Frido Ortho Memory Foam Pillow", aliases: ["Memory Foam Pillow", "Ortho Pillow"] },
-  { id: "Frido Orthopedic Heel Pad", name: "Frido Orthopedic Heel Pad", aliases: ["Heel Pad", "Ortho Heel Pad"] },
-  { id: "Frido Orthotics Bunion Corrector", name: "Frido Orthotics Bunion Corrector", aliases: ["Bunion Corrector", "Toe Corrector"] },
-  { id: "Frido Orthotics Compression Gloves", name: "Frido Orthotics Compression Gloves", aliases: ["Compression Gloves", "Hand Gloves"] },
-  { id: "Frido Orthotics Posture Corrector", name: "Frido Orthotics Posture Corrector", aliases: ["Posture Corrector", "Back Brace"] },
-  { id: "Frido Orthotics Wrist Support Brace", name: "Frido Orthotics Wrist Support Brace", aliases: ["Wrist Brace", "Wrist Support"] },
-  { id: "Frido Ouch Free High Heels Ball of Foot Cushions", name: "Frido Ouch Free High Heels Ball of Foot Cushions", aliases: ["High Heel Cushion", "Ball Foot Cushion"] },
-  { id: "Frido Plantar Fasciitis Pain Relief Ortho Insole", name: "Frido Plantar Fasciitis Pain Relief Ortho Insole", aliases: ["Plantar Fasciitis Insole", "Pain Relief Insole"] },
-  { id: "Frido School Shoes", name: "Frido School Shoes", aliases: ["Kids Shoes", "School Footwear"] },
-  { id: "Frido Silicone Gel Insole", name: "Frido Silicone Gel Insole", aliases: ["Silicone Insole", "Gel Insole"] },
-  { id: "Frido Slim Seat Cushion", name: "Frido Slim Seat Cushion", aliases: ["Slim Cushion", "Thin Seat Cushion"] },
-  { id: "Frido Travel Neck Pillow", name: "Frido Travel Neck Pillow", aliases: ["Travel Pillow", "Neck Support Travel"] },
-  { id: "Frido Ultimate Back Lumbar Cushion", name: "Frido Ultimate Back Lumbar Cushion", aliases: ["Lumbar Cushion", "Back Support Cushion"] },
-  { id: "Frido Ultimate Car Backrest Cushion", name: "Frido Ultimate Car Backrest Cushion", aliases: ["Car Backrest", "Car Back Support"] },
-  { id: "Frido Ultimate Car Neck Rest Pillow", name: "Frido Ultimate Car Neck Rest Pillow", aliases: ["Car Neck Pillow", "Neck Rest Car"] },
-  { id: "Frido Ultimate Car Wedge Seat Cushion", name: "Frido Ultimate Car Wedge Seat Cushion", aliases: ["Car Wedge Cushion", "Wedge Seat Car"] },
-  { id: "Frido Ultimate Coccyx Seat Cushion", name: "Frido Ultimate Coccyx Seat Cushion", aliases: ["Coccyx Cushion", "Tailbone Cushion"] },
-  { id: "Frido Ultimate Cozy Pillow", name: "Frido Ultimate Cozy Pillow", aliases: ["Cozy Pillow", "Comfort Pillow"] },
-  { id: "Frido Ultimate Deep Sleep Pillow", name: "Frido Ultimate Deep Sleep Pillow", aliases: ["Deep Sleep Pillow", "Sleep Pillow"] },
-  { id: "Frido Ultimate Lap Desk Pillow", name: "Frido Ultimate Lap Desk Pillow", aliases: ["Lap Desk", "Desk Pillow"] },
-  { id: "Frido Ultimate Mattress Topper", name: "Frido Ultimate Mattress Topper", aliases: ["Mattress Topper", "Bed Topper"] },
-  { id: "Frido Ultimate Neck Contour Cervical Pillow", name: "Frido Ultimate Neck Contour Cervical Pillow", aliases: ["Neck Contour Pillow", "Cervical Pillow"] },
-  { id: "Frido Ultimate Neck Contour Cervical Plus Pillow", name: "Frido Ultimate Neck Contour Cervical Plus Pillow", aliases: ["Cervical Plus Pillow", "Neck Contour Plus"] },
-  { id: "Frido Ultimate Office Neck Rest Pillow", name: "Frido Ultimate Office Neck Rest Pillow", aliases: ["Office Neck Pillow", "Work Neck Rest"] },
-  { id: "Frido Ultimate Piles Pain Relief Seat Cushion", name: "Frido Ultimate Piles Pain Relief Seat Cushion", aliases: ["Piles Cushion", "Hemorrhoid Cushion"] },
-  { id: "Frido Ultimate Pro Posture Corrector", name: "Frido Ultimate Pro Posture Corrector", aliases: ["Pro Posture Corrector", "Posture Corrector Pro"] },
-  { id: "Frido Ultimate Pro Seat Cushion", name: "Frido Ultimate Pro Seat Cushion", aliases: ["Pro Seat Cushion", "Seat Cushion Pro"] },
-  { id: "Frido Ultimate Socket Seat Cushion", name: "Frido Ultimate Socket Seat Cushion", aliases: ["Socket Cushion", "Socket Seat"] },
-  { id: "Frido Ultimate Sofa Backrest Cushion", name: "Frido Ultimate Sofa Backrest Cushion", aliases: ["Sofa Backrest", "Couch Back Support"] },
-  { id: "Frido Ultimate Tailbone Pain Relief Seat Cushion", name: "Frido Ultimate Tailbone Pain Relief Seat Cushion", aliases: ["Tailbone Cushion", "Coccyx Pain Relief"] },
-  { id: "Frido Ultimate Wedge Cushion", name: "Frido Ultimate Wedge Cushion", aliases: ["Wedge Cushion", "Incline Cushion"] },
-  { id: "Frido Ultimate Wedge Plus Cushion", name: "Frido Ultimate Wedge Plus Cushion", aliases: ["Wedge Plus", "Wedge Cushion Plus"] },
-  { id: "Frido Ultimate Wedge Plus Max Cushion", name: "Frido Ultimate Wedge Plus Max Cushion", aliases: ["Wedge Plus Max", "Max Wedge Cushion"] },
-  { id: "Frido Ultra Slim Deep Sleep Pillow", name: "Frido Ultra Slim Deep Sleep Pillow", aliases: ["Ultra Slim Pillow", "Slim Sleep Pillow"] },
-  { id: "Frido Wedge Neck Rest Pillow", name: "Frido Wedge Neck Rest Pillow", aliases: ["Wedge Neck Pillow", "Neck Rest Wedge"] },
-  { id: "Frido Wedge Plus Cushion Cover", name: "Frido Wedge Plus Cushion Cover", aliases: ["Wedge Cover", "Cushion Cover"] },
-  { id: "Frido Women Comfort Sandal", name: "Frido Women Comfort Sandal", aliases: ["Women Sandal", "Comfort Sandal"] },
-  { id: "Frido Orthopedic Heel Pad", name: "Frido Orthopedic Heel Pad", aliases: ["Pro Heel Pad", "Heel Cushion Pro","Orthopedic Heel Pad Pro","Heel Pad Pro"] },
-  { id: "Max Comfort Arch Sports Insoles (Non RCB)", name: "Max Comfort Arch Sports Insoles (Non RCB)", aliases: ["Max Comfort Insoles", "Arch Sports Insole"] },
-  { id: "Portable Standing Desk", name: "Portable Standing Desk", aliases: ["Standing Desk", "Portable Desk"] },
-  { id: "Prime Electric Wheelchair", name: "Prime Electric Wheelchair", aliases: ["Electric Wheelchair", "Wheelchair"] },
-];
+// Exporting an empty array to maintain backward compatibility if needed, 
+// but internal logic will use fetched products.
+export const FRIDO_PRODUCTS: Product[] = [];
 
 export class ProductCatalog {
   private products: Product[];
+  private lastFetchTime: number = 0;
+  private readonly CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+  private fetchPromise: Promise<void> | null = null;
 
-  constructor(products: Product[] = FRIDO_PRODUCTS) {
-    this.products = products;
+  constructor() {
+    this.products = [];
+    // Trigger initial fetch
+    this.refreshProducts().catch(err => console.error('Failed to initialize product catalog:', err));
+  }
+
+  /**
+   * Fetches products from the API with caching
+   */
+  public async refreshProducts(): Promise<void> {
+    // Return existing promise if a fetch is already in progress
+    if (this.fetchPromise) {
+      return this.fetchPromise;
+    }
+
+    // Check cache validity
+    if (this.products.length > 0 && (Date.now() - this.lastFetchTime < this.CACHE_DURATION)) {
+      return;
+    }
+
+    this.fetchPromise = (async () => {
+      try {
+        console.log('Fetching product list from API...');
+        const response = await axios.get('https://asia-south1-replify-9f49f.cloudfunctions.net/getProductList');
+        
+        if (Array.isArray(response.data)) {
+          // Map API response to internal Product interface
+          this.products = response.data.map((item: any) => ({
+            id: item.id,
+            name: item.name,
+            aliases: item.alias || item.aliases || []
+          }));
+          this.lastFetchTime = Date.now();
+          console.log(`✅ Product catalog updated: ${this.products.length} products loaded`);
+        } else {
+          console.error('❌ Invalid product list format received from API');
+        }
+      } catch (error) {
+        console.error('❌ Error fetching product list:', error);
+        // If we have no products and fetch fails, we might want to use a fallback or retry
+        // For now, we keep the existing state (empty or stale)
+      } finally {
+        this.fetchPromise = null;
+      }
+    })();
+
+    return this.fetchPromise;
   }
 
   /**
    * Get all product names for reference
    */
   getAllProductNames(): string[] {
+    // If products haven't loaded yet and it's been less than 5 seconds since start,
+    // we might be in a race condition. But since this is sync, we return what we have.
     return this.products.map(p => p.name);
   }
 
@@ -99,41 +87,85 @@ export class ProductCatalog {
     score: number;
     matchType: 'exact' | 'alias' | 'fuzzy';
   }> {
+    // Ensure we have products (non-blocking attempt to refresh if stale)
+    if (Date.now() - this.lastFetchTime > this.CACHE_DURATION && !this.fetchPromise) {
+        this.refreshProducts().catch(e => console.error("Background refresh failed", e));
+    }
+
     const normalizedQuery = this.normalizeText(query);
     const results: Array<{ product: Product; score: number; matchType: 'exact' | 'alias' | 'fuzzy' }> = [];
 
-    // Check for exact matches first
+    // Common stop words to ignore in alias matching
+    const stopWords = new Set(['of', 'the', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'a', 'an']);
+
     for (const product of this.products) {
       const normalizedName = this.normalizeText(product.name);
-      
-      // Exact match
+      let bestScore = 0;
+      let bestMatchType: 'exact' | 'alias' | 'fuzzy' = 'fuzzy';
+
+      // 1. Check Exact Match
       if (normalizedName === normalizedQuery) {
-        results.push({ product, score: 1.0, matchType: 'exact' });
-        continue;
+        bestScore = 1.0;
+        bestMatchType = 'exact';
+      }
+      // 2. Check Exact Substring (Query is part of Name OR Name is part of Query)
+      else if (normalizedName.includes(normalizedQuery)) {
+         // User typed "Barefoot", matches "Barefoot Sock Shoe"
+         bestScore = 0.9;
+         bestMatchType = 'exact';
+      } else if (normalizedQuery.includes(normalizedName)) {
+         // User typed "I want Barefoot Sock Shoe", matches "Barefoot Sock Shoe"
+         bestScore = 0.95;
+         bestMatchType = 'exact';
       }
 
-      // Exact substring match
-      if (normalizedName.includes(normalizedQuery) || normalizedQuery.includes(normalizedName)) {
-        results.push({ product, score: 0.9, matchType: 'exact' });
-        continue;
-      }
-
-      // Check aliases
-      if (product.aliases) {
+      // 3. Check Aliases
+      // Only if exact/substring didn't give a perfect match
+      if (bestScore < 1.0 && product.aliases) {
         for (const alias of product.aliases) {
           const normalizedAlias = this.normalizeText(alias);
-          if (normalizedAlias === normalizedQuery || normalizedAlias.includes(normalizedQuery) || normalizedQuery.includes(normalizedAlias)) {
-            results.push({ product, score: 0.85, matchType: 'alias' });
-            break;
+          if (!normalizedAlias) continue;
+          
+          let currentAliasScore = 0;
+
+          if (normalizedAlias === normalizedQuery) {
+             currentAliasScore = 0.95;
+          } else if (normalizedAlias.includes(normalizedQuery)) {
+             // Query is substring of alias (User typing prefix)
+             currentAliasScore = 0.85;
+          } else if (normalizedQuery.includes(normalizedAlias)) {
+             // Alias is substring of query (e.g. "Classic" in "Barefoot Sock Shoe Classic")
+             
+             // Skip stop words and very short aliases
+             if (stopWords.has(normalizedAlias)) continue;
+             if (normalizedAlias.length < 3) continue;
+
+             // Calculate score based on alias length (longer aliases = more specific = higher score)
+             // Base score 0.6. Boost up to 0.25 based on length.
+             // This ensures "Barefoot Sock Shoe Classic" (long) > "Classic" (short)
+             const lengthBoost = Math.min(0.25, (normalizedAlias.length / 50)); 
+             currentAliasScore = 0.6 + lengthBoost;
+          }
+
+          if (currentAliasScore > bestScore) {
+            bestScore = currentAliasScore;
+            bestMatchType = 'alias';
           }
         }
-        if (results[results.length - 1]?.product === product) continue;
       }
 
-      // Fuzzy matching with multiple techniques
-      const fuzzyScore = this.calculateFuzzyScore(normalizedQuery, normalizedName, product.aliases);
-      if (fuzzyScore >= threshold) {
-        results.push({ product, score: fuzzyScore, matchType: 'fuzzy' });
+      // 4. Fuzzy Matching (only if we haven't found a good match yet)
+      // We use a higher threshold for triggering calculation to avoid expensive ops if we have a good match
+      if (bestScore < 0.8) {
+         const fuzzyScore = this.calculateFuzzyScore(normalizedQuery, normalizedName, product.aliases);
+         if (fuzzyScore > bestScore) {
+            bestScore = fuzzyScore;
+            bestMatchType = 'fuzzy';
+         }
+      }
+
+      if (bestScore >= threshold) {
+        results.push({ product, score: bestScore, matchType: bestMatchType });
       }
     }
 
@@ -248,4 +280,3 @@ export class ProductCatalog {
 }
 
 export const productCatalog = new ProductCatalog();
-
