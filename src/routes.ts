@@ -419,7 +419,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate minimal shape early
       for (let i = 0; i < qaPairs.length; i++) {
         const p = qaPairs[i];
-        if (!p || !p.query || !p.answer || !p.productName) {
+        if (!p || !p.answer || !p.productName) {
           return res.status(400).json({ message: `qaPairs[${i}] must include query, answer, and productName` });
         }
       }
