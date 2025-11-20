@@ -3,7 +3,7 @@ import { extractDocumentMetadata } from "../../services/llm/openai.js";
 import { qdrantService } from "../rag/providers/qdrantHybrid.js";
 
 export interface QAPairInput {
-  query: string;
+  query?: string;
   answer: string;
   productName: string;
 }
@@ -26,8 +26,8 @@ class QAIngestionService {
 
     // Validate inputs early
     pairs.forEach((p, i) => {
-      if (!p.query || !p.answer || !p.productName) {
-        throw new Error(`QA pair at index ${i} is missing query, answer, or productName`);
+      if (!p.answer || !p.productName) {
+        throw new Error(`QA pair at index ${i} is missing answer or productName`);
       }
     });
 
@@ -48,7 +48,9 @@ class QAIngestionService {
       const pair = pairs[index];
       try {
         // 1) Generate intelligent metadata using existing function (same as PDFs)
-        const combinedText = `Question: ${pair.query}\n\nAnswer: ${pair.answer}`;
+        const combinedText = pair.query
+          ? `Question: ${pair.query}\n\nAnswer: ${pair.answer}`
+          : `Product Knowledge Update: ${pair.answer}`;
         const aiMetadata = await extractDocumentMetadata(combinedText, `qa_pair_${index}.txt`);
 
         // 2) Build chunk metadata matching retrieval indexes
