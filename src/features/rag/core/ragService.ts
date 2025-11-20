@@ -5,6 +5,8 @@ import { inferenceProvider } from "../../../services/llm/inference.js";
 import { openai } from "../../../services/llm/openai.js";
 import { env } from "../../../env.js";
 import { enhancedRAGService, EnhancedRAGOptions } from "./enhancedRAG.js";
+import { detectResponseFormat } from "../../../utils/formatDetection.js";
+
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
   suggestedTopics: string[];
@@ -15,6 +17,7 @@ export interface ContextMissingAnalysis {
 export interface RAGResponse {
   query: string;
   response: string;
+  responseFormat?: 'table' | 'markdown' | 'text';
   sources: Array<{
     documentId: number;
     filename: string;
@@ -45,6 +48,7 @@ export class RAGService {
       return {
         query: enhancedResponse.query,
         response: enhancedResponse.response,
+        responseFormat: enhancedResponse.responseFormat,
         sources: enhancedResponse.sources,
         contextAnalysis: enhancedResponse.contextAnalysis,
       };
@@ -183,6 +187,7 @@ Examples:
         return {
           query,
           response: queryAnalysis.directResponse,
+          responseFormat: 'text', // If no RAG needed, it's usually simple text, but could check formatAsMarkdown if passed here
           sources: [],
           contextAnalysis: {
             isContextMissing: false,
@@ -213,6 +218,7 @@ Examples:
         return {
           query,
           response: noResultsResponse,
+          responseFormat: 'text',
           sources: [],
           contextAnalysis: {
             ...contextAnalysis,
@@ -259,6 +265,7 @@ Examples:
         return {
           query,
           response: "", // Empty response since customer service will generate its own
+          responseFormat: 'text',
           sources,
           contextAnalysis: {
             isContextMissing: false,
@@ -316,6 +323,7 @@ Examples:
       return {
         query,
         response: responseData.response,
+        responseFormat: 'text',
         sources,
         contextAnalysis,
       };
@@ -546,6 +554,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
         return {
           query,
           response: noResultsResponse,
+          responseFormat: 'text',
           sources: [],
           contextAnalysis: { ...contextAnalysis, isContextMissing: true },
         };
@@ -587,6 +596,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
       return {
         query,
         response: responseData.response,
+        responseFormat: 'text',
         sources,
         contextAnalysis,
       };

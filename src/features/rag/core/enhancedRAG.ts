@@ -17,6 +17,8 @@ import { contextualCompressor, CompressedChunk } from "../components/contextualC
 import { createEmbedding, createBatchEmbeddings } from "../providers/embeddingService.js";
 import { qdrantService, SearchResult } from "../providers/qdrantHybrid.js";
 import { inferenceProvider } from "../../../services/llm/inference.js";
+import { detectResponseFormat } from "../../../utils/formatDetection.js";
+
 export interface EnhancedRAGOptions {
   retrievalCount?: number;
   similarityThreshold?: number;
@@ -41,6 +43,7 @@ export interface EnhancedRAGOptions {
 export interface EnhancedRAGResponse {
   query: string;
   response: string;
+  responseFormat?: 'table' | 'markdown' | 'text';
   sources: Array<{
     documentId: number;
     filename: string;
@@ -142,6 +145,7 @@ export class EnhancedRAGService {
         return {
           query,
           response: expandedQuery.directResponse,
+          responseFormat: formatAsMarkdown ? detectResponseFormat(expandedQuery.directResponse) : 'text',
           sources: [],
           contextAnalysis: {
             isContextMissing: false,
@@ -204,6 +208,7 @@ export class EnhancedRAGService {
         return {
           query,
           response: noResultsResponse,
+          responseFormat: 'text',
           sources: [],
           contextAnalysis: { ...contextAnalysis, isContextMissing: true },
           performance,
@@ -292,6 +297,7 @@ export class EnhancedRAGService {
         return {
           query,
           response: "",
+          responseFormat: 'text',
           sources,
           contextAnalysis: {
             isContextMissing: false,
@@ -351,6 +357,7 @@ export class EnhancedRAGService {
       return {
         query,
         response: responseData.response, // Use the beautified response, not the raw one
+        responseFormat: formatAsMarkdown ? detectResponseFormat(responseData.response) : 'text',
         sources,
         contextAnalysis,
         performance,
