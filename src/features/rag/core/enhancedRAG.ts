@@ -99,6 +99,34 @@ export class EnhancedRAGService {
   ];
 
   /**
+   * Analyze query to determine desired response format (Table, Markdown, etc.)
+   */
+  private async analyzeResponseStyle(query: string): Promise<'markdown' | 'table' | 'text'> {
+    const systemPrompt = `You are a query analyzer. Determine the desired output format based on the user's request.
+Options:
+- "table": If the user explicitly requests a table, comparison matrix, grid, or structured rows/columns.
+- "markdown": Default for general queries, explanations, lists, or when markdown is requested.
+
+Query: ${query}
+
+Return ONLY one word: "table" or "markdown".`;
+
+    try {
+      const result = await inferenceProvider.chatCompletion(
+        systemPrompt,
+        "Determine format",
+        { temperature: 0, maxTokens: 10 }
+      );
+      
+      const normalized = result.toLowerCase().trim();
+      if (normalized.includes('table')) return 'table';
+      return 'markdown';
+    } catch (e) {
+      return 'markdown'; // Fallback
+    }
+  }
+
+  /**
    * Main query method with enhanced RAG pipeline
    */
   async query(query: string, options: EnhancedRAGOptions = {}): Promise<EnhancedRAGResponse> {
@@ -318,6 +346,17 @@ export class EnhancedRAGService {
       // ==================== Step 6: Response Generation ====================
       const genStart = Date.now();
       let responseData;
+
+      // Determine response style
+      let responseStyle: 'markdown' | 'table' | 'text' = formatAsMarkdown ? 'markdown' : 'text';
+      
+      if (formatAsMarkdown) {
+        // Analyze if user wants a table
+        const detectedStyle = await this.analyzeResponseStyle(query);
+        if (detectedStyle === 'table') {
+          responseStyle = 'table';
+        }
+      }
       
       // Choose appropriate generation strategy based on query type
       if (expandedQuery.isProductCatalogQuery) {
@@ -325,7 +364,7 @@ export class EnhancedRAGService {
         responseData = await this.generateCatalogResponse(
           expandedQuery.normalizedQuery,
           finalChunks,
-          formatAsMarkdown
+          responseStyle
         );
       } else if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
         // Use comparison-specific generation for multi-product queries
@@ -333,10 +372,10 @@ export class EnhancedRAGService {
           expandedQuery.normalizedQuery,
           finalChunks,
           expandedQuery.comparisonProducts,
-          formatAsMarkdown
+          responseStyle
         );
       } else if (intent === "query") {
-        responseData = await this.generateResponse(expandedQuery.normalizedQuery, finalChunks, formatAsMarkdown);
+        responseData = await this.generateResponse(expandedQuery.normalizedQuery, finalChunks, responseStyle);
       } else {
         responseData = await this.generateSalesAgentResponse(expandedQuery.normalizedQuery, finalChunks);
       }
@@ -591,21 +630,34 @@ export class EnhancedRAGService {
   private async generateResponse(
     query: string,
     contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    formatAsMarkdown: boolean = false
+    responseStyle: 'markdown' | 'table' | 'text' = 'text'
   ): Promise<{ response: string; usedChunkIds: string[] }> {
     
-    const responseFormat = formatAsMarkdown
-  ? `
+    let responseFormat = '';
+    
+    if (responseStyle === 'table') {
+      responseFormat = `
+You are a professional technical writer.
+Respond in a **Markdown Table** format.
+- Create a clear table with relevant columns based on the query.
+- If comparing items, use the items as rows or columns as appropriate.
+- Ensure the table is well-formatted.
+- Add a brief introductory sentence before the table and a brief summary after.
+`;
+    } else if (responseStyle === 'markdown') {
+      responseFormat = `
 You are a professional technical writer.  
 Respond in **beautifully formatted Markdown** that feels natural and easy to read.  
 Use clear structure, meaningful headings, bullet points, and occasional bold or italics where it enhances readability.  
 Avoid over-formatting or unnecessary symbols.  
-`
-  : `
+`;
+    } else {
+      responseFormat = `
 You are a professional technical writer.  
 Respond in **plain text only** — no Markdown or special characters.  
 Keep the response well-structured, easy to scan, and naturally formatted using simple section titles and bullet points.  
 `;
+    }
 
     const systemPrompt = `You are an AI assistant helping users find information about products.
     
@@ -673,7 +725,7 @@ ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
     query: string,
     contextChunks: Array<{ id: string; content: string; originalData: any }>,
     products: string[],
-    formatAsMarkdown: boolean = false
+    responseStyle: 'markdown' | 'table' | 'text' = 'text'
   ): Promise<{ response: string; usedChunkIds: string[] }> {
     // Group chunks by product
     const chunksByProduct: Record<string, typeof contextChunks> = {};
@@ -697,8 +749,17 @@ ${productChunks.map(c => c.content).join('\n---\n')}
 `;
     }).join('\n\n');
 
-    const responseFormat = formatAsMarkdown
-      ? `COMPARISON FORMAT - MARKDOWN:
+    let responseFormat = '';
+
+    if (responseStyle === 'table') {
+      responseFormat = `COMPARISON FORMAT - TABLE:
+- Present the comparison as a **Markdown Table**.
+- Columns should be the Products being compared.
+- Rows should be the Features/Specifications/Aspects being compared.
+- Add a brief introductory sentence before the table and a brief summary after.
+- Ensure the table is clean and readable.`;
+    } else if (responseStyle === 'markdown') {
+      responseFormat = `COMPARISON FORMAT - MARKDOWN:
 - Use proper Markdown formatting
 - Start with "## Overview" describing both products briefly
 - **IMPORTANT: Wrap all product names in bold using **Product Name** format throughout the entire response**
@@ -711,8 +772,9 @@ ${productChunks.map(c => c.content).join('\n---\n')}
 - Within each section, use bullet points with bold product names: "- **Product A**: ..." and "- **Product B**: ..."
 - Use "  - " (2 spaces + dash) for nested details
 - Add blank lines between sections
-- End with "## Summary" highlighting key differences and recommendations`
-      : `COMPARISON FORMAT - PLAIN TEXT:
+- End with "## Summary" highlighting key differences and recommendations`;
+    } else {
+      responseFormat = `COMPARISON FORMAT - PLAIN TEXT:
 - Write in PLAIN TEXT only - NO markdown symbols (no ##, no **, no decorative characters)
 - Start with "Overview" describing both products briefly
 - Create clear comparison sections with section headers:
@@ -726,6 +788,7 @@ ${productChunks.map(c => c.content).join('\n---\n')}
 - Use "  - " (2 spaces + dash) for nested details
 - Add blank lines between sections
 - End with "Summary" highlighting key differences and recommendations`;
+    }
 
     const systemPrompt = `You are an AI assistant helping users compare products.
 
@@ -789,7 +852,7 @@ ${organizedContext}`;
   private async generateCatalogResponse(
     query: string,
     contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    formatAsMarkdown: boolean = false
+    responseStyle: 'markdown' | 'table' | 'text' = 'text'
   ): Promise<{ response: string; usedChunkIds: string[] }> {
     // Group chunks by product to understand what products are available
     const productInfo = new Map<string, Array<{ id: string; content: string }>>();
@@ -804,22 +867,32 @@ ${organizedContext}`;
 
     console.log(`📚 Generating catalog response for ${productInfo.size} products`);
 
-    const responseFormat = formatAsMarkdown
-      ? `CATALOG FORMAT - MARKDOWN:
+    let responseFormat = '';
+
+    if (responseStyle === 'table') {
+      responseFormat = `CATALOG FORMAT - TABLE:
+- Present the product catalog as a **Markdown Table**.
+- Columns should include: Product Name, Key Features, Use Case, etc.
+- List each product as a row.
+- Add a brief introductory sentence before the table and a brief summary after.`;
+    } else if (responseStyle === 'markdown') {
+      responseFormat = `CATALOG FORMAT - MARKDOWN:
 - Use proper Markdown formatting with headers and structure
 - Start with "## Product Overview" or "## Our Product Lineup"
 - List each product/category with a brief description
 - Use bullet points or numbered lists for clear organization
 - Include key features and benefits for each product
 - Use bold for product names: **Product Name**
-- Add sections like "## Product Categories" if multiple categories exist`
-      : `CATALOG FORMAT - PLAIN TEXT:
+- Add sections like "## Product Categories" if multiple categories exist`;
+    } else {
+      responseFormat = `CATALOG FORMAT - PLAIN TEXT:
 - Write in PLAIN TEXT only - NO markdown symbols
 - Start with "Product Overview" or "Our Product Lineup"
 - List each product/category with a brief description
 - Use simple bullet points "-" for organization
 - Include key features and benefits for each product
 - Keep formatting clean and readable`;
+    }
 
     const systemPrompt = `You are an AI assistant providing a comprehensive product catalog overview.
 
