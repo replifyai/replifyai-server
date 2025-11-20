@@ -97,17 +97,29 @@ export async function createBatchEmbeddings(
   texts: string[], 
   options: EmbeddingOptions = {}
 ): Promise<number[][]> {
+  if (!texts || texts.length === 0) {
+    console.log('⚠️ Embedding Service: Received empty text array, skipping embedding creation.');
+    return [];
+  }
+
   const provider = options.provider || env.EMBEDDING_PROVIDER as EmbeddingProvider;
+  console.log(`✨ Creating batch embeddings for ${texts.length} texts using ${provider}...`);
   
   try {
+    let embeddings: number[][];
     switch (provider) {
       case 'nebius':
-        return await createBatchNebiusEmbeddings(texts, options.model);
+        embeddings = await createBatchNebiusEmbeddings(texts, options.model);
+        break;
       case 'openai':
       default:
-        return await createBatchOpenAIEmbeddings(texts, options.model);
+        embeddings = await createBatchOpenAIEmbeddings(texts, options.model);
+        break;
     }
+    console.log(`✅ Successfully created ${embeddings.length} embeddings.`);
+    return embeddings;
   } catch (error) {
+    console.error(`❌ Failed to create batch embeddings with ${provider}:`, error);
     throw new Error(`Failed to create batch embeddings with ${provider}: ${(error as Error).message}`);
   }
 }

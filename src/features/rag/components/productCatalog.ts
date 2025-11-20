@@ -153,6 +153,11 @@ export class ProductCatalog {
           }
         }
       }
+      
+      // Log detailed scoring for this product if it's a potential candidate
+      if (bestScore >= threshold) {
+        console.log(`🔍 Fuzzy Match Candidate: "${product.name}" (Score: ${bestScore.toFixed(2)}, Type: ${bestMatchType})`);
+      }
 
       // 4. Fuzzy Matching (only if we haven't found a good match yet)
       // We use a higher threshold for triggering calculation to avoid expensive ops if we have a good match

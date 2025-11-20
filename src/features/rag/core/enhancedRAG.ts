@@ -454,7 +454,7 @@ export class EnhancedRAGService {
         embedding,
         retrievalCount,
         similarityThreshold,
-        productName
+        productName?.trim()
       );
 
       // Add unique results
@@ -490,6 +490,16 @@ export class EnhancedRAGService {
 
     // Retrieve chunks for each product
     for (const [product, productQueries] of Object.entries(queryGroups)) {
+      if (productQueries.length === 0) {
+        console.log(`⚠️ No queries found for product "${product}", skipping retrieval.`);
+        continue;
+      }
+      
+      // 🚀 Ensure whitespace is trimmed from product name before retrieval
+      const trimmedProduct = product.trim();
+
+      console.log(`🔍 Retrieving for product "${trimmedProduct}" with ${productQueries.length} queries...`);
+
       // Create embeddings for this product's queries
       const embeddings = await createBatchEmbeddings(productQueries);
 
@@ -502,7 +512,7 @@ export class EnhancedRAGService {
           embedding,
           retrievalCount,
           similarityThreshold,
-          product // Filter by specific product
+          trimmedProduct // Filter by specific product
         );
 
         // Add unique results
@@ -529,10 +539,14 @@ export class EnhancedRAGService {
       groups[product] = [];
     });
 
+    // Sort products by length descending to match specific names first
+    // e.g. "Frido Dual Gel Insoles Pro" (longer) before "Frido Dual Gel Insoles" (shorter)
+    const sortedProducts = [...products].sort((a, b) => b.length - a.length);
+
     // Assign queries to products based on which product name they contain
     for (const query of queries) {
       const lowerQuery = query.toLowerCase();
-      for (const product of products) {
+      for (const product of sortedProducts) {
         const lowerProduct = product.toLowerCase();
         if (lowerQuery.includes(lowerProduct)) {
           groups[product].push(query);
@@ -597,6 +611,13 @@ CRITICAL INSTRUCTIONS:
 4. Never mention "chunk", "document", "source", or "context" in your response
 5. Answer with confidence and clarity
 6. Be comprehensive and cover all relevant aspects from the context
+
+RESPONSE LENGTH & STYLE:
+- **Be concise and direct.** Answer the user's question immediately.
+- Elaboration is good, but keep it focused and relevant.
+- Avoid unnecessary preamble or fluff.
+- If the question is simple (e.g., price, weight), give a short, direct answer first, then add 1-2 sentences of context if useful.
+- Adjust response length to the complexity of the query.
 
 CITATION RULES:
 - MUST cite chunks using [USED_CHUNK: chunk_id] after each statement

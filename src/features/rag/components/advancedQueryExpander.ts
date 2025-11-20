@@ -49,7 +49,14 @@ export class AdvancedQueryExpander {
     const { companyContext, productName, maxQueries = 5 } = options;
 
     // Step 1: Detect and normalize product names with fuzzy matching
-    const detectedProducts = await this.detectProductNames(query, productName);
+    // ⚡ OPTIMIZATION: Use LLM to verify product matches if fuzzy matching is ambiguous
+    // This improves accuracy for cases like "Pro" vs non-Pro where fuzzy matching might be too loose
+    let detectedProducts = await this.detectProductNames(query, productName);
+    
+    if (detectedProducts.length > 0) {
+        // Verify matches with LLM to filter out incorrect fuzzy matches
+        detectedProducts = await this.verifyProductMatchesWithLLM(query, detectedProducts);
+    }
 
     // Step 2: Normalize query by replacing misspellings with correct product names
     const normalizedQuery = this.normalizeQuery(query, detectedProducts);
@@ -83,6 +90,13 @@ export class AdvancedQueryExpander {
     // Step 4: Generate multiple search queries using different perspectives
     let searchQueries: string[];
     
+    // 🚀 CRITICAL FIX: If we have a strong single product match (Pro version vs Standard),
+    // force the use of that specific product name in search queries to avoid mixing up variants.
+    // This is especially important for "Pro" vs non-Pro versions.
+    const singleExactProductMatch = detectedProducts.find(p => 
+        p.toLowerCase().includes('pro') && normalizedQuery.toLowerCase().includes('pro')
+    ) || (detectedProducts.length === 1 ? detectedProducts[0] : null);
+
     if (isCatalog) {
       // For product catalog queries, generate diverse queries to retrieve all products
       searchQueries = await this.generateCatalogSearchQueries(
@@ -92,9 +106,10 @@ export class AdvancedQueryExpander {
       );
     } else if (isComparison && isMultiProduct) {
       // For comparison queries with multiple products
+      // 🚀 Use detected products for comparison queries, respecting any LLM refinement
       searchQueries = await this.generateComparisonSearchQueries(
         normalizedQuery,
-        detectedProducts,
+        detectedProducts, // Use the refined detectedProducts list here
         companyContext,
         maxQueries
       );
@@ -107,6 +122,18 @@ export class AdvancedQueryExpander {
         companyContext,
         maxQueries
       );
+      
+      // 🚀 FORCE EXACT MATCH: If we have a single detected product, ensure it's preserved EXACTLY in queries
+      if (singleExactProductMatch) {
+        console.log(`🔒 Locking search to exact product: "${singleExactProductMatch}"`);
+        searchQueries = searchQueries.map(q => {
+            // If the query doesn't contain the exact product name, append it
+            if (!q.includes(singleExactProductMatch)) {
+                return `${q} "${singleExactProductMatch}"`; // Quote it for emphasis if supported, or just append
+            }
+            return q;
+        });
+      }
     }
 
     // Step 5: Expand each query with domain-specific terms
@@ -129,6 +156,64 @@ export class AdvancedQueryExpander {
       comparisonProducts: isComparison && isMultiProduct ? detectedProducts : undefined,
       isProductCatalogQuery: isCatalog,
     };
+  }
+
+  /**
+   * Verify product matches using LLM to ensure accuracy
+   * This helps resolve ambiguity between similar product names (e.g., "Pro" vs standard)
+   */
+  private async verifyProductMatchesWithLLM(query: string, candidates: string[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    if (candidates.length === 1) return candidates; // Single candidate is usually correct
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a product identification expert.
+Your task is to identify which specific product(s) the user is referring to in their query, given a list of candidate products found by fuzzy matching.
+
+User Query: "${query}"
+
+Candidate Products:
+${candidates.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+Instructions:
+1. Select the product(s) that BEST match the user's query.
+2. Be precise. If the user says "Pro", ONLY select the "Pro" version, not the standard one.
+3. If multiple products are legitimately mentioned or implied, select all of them.
+4. If the query is vague and could refer to multiple candidates, select the most likely ones.
+5. Return ONLY a JSON object with the selected product names.
+
+Example:
+Query: "Price of Frido Dual Gel Insoles Pro"
+Candidates: ["Frido Dual Gel Insoles", "Frido Dual Gel Insoles Pro"]
+Result: {"selected": ["Frido Dual Gel Insoles Pro"]}
+`
+          },
+          { role: 'user', content: query }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 200,
+        response_format: { type: "json_object" }
+      });
+
+      const content = response.choices[0]?.message?.content || '{"selected": []}';
+      const result = JSON.parse(content);
+      
+      // If LLM returns valid selection, use it. Otherwise fall back to original candidates.
+      if (result.selected && Array.isArray(result.selected) && result.selected.length > 0) {
+        console.log(`🧠 LLM Refined Product Selection: ${JSON.stringify(result.selected)} (Original: ${JSON.stringify(candidates)})`);
+        return result.selected;
+      }
+      
+      return candidates;
+    } catch (error) {
+      console.error('❌ LLM product verification failed:', error);
+      return candidates;
+    }
   }
 
   /**
@@ -472,6 +557,13 @@ Return JSON:
 
     // Extract products from query
     const queryMatches = productCatalog.fuzzyMatchProducts(query, 0.4, 3);
+    
+    if (queryMatches.length > 0) {
+        console.log(`🔍 Detected Products in Query: ${queryMatches.map(m => `"${m.product.name}" (Score: ${m.score.toFixed(2)})`).join(', ')}`);
+    } else {
+        console.log(`🔍 No products detected in query: "${query}"`);
+    }
+
     for (const match of queryMatches) {
       if (!detected.includes(match.product.name)) {
         detected.push(match.product.name);
