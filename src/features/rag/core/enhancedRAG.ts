@@ -612,13 +612,6 @@ CRITICAL INSTRUCTIONS:
 5. Answer with confidence and clarity
 6. Be comprehensive and cover all relevant aspects from the context
 
-RESPONSE LENGTH & STYLE:
-- **Be concise and direct.** Answer the user's question immediately.
-- Elaboration is good, but keep it focused and relevant.
-- Avoid unnecessary preamble or fluff.
-- If the question is simple (e.g., price, weight), give a short, direct answer first, then add 1-2 sentences of context if useful.
-- Adjust response length to the complexity of the query.
-
 CITATION RULES:
 - MUST cite chunks using [USED_CHUNK: chunk_id] after each statement
 - Cite multiple chunks if information comes from multiple sources
