@@ -77,6 +77,7 @@ export class RAGService {
     /unable to answer.*question/i,
     /context.*does not include/i,
     /provided context.*does not/i,
+    /provided documents.*do not contain/i,
   ];
   /**
    * Classify and expand query - determines if RAG is needed
@@ -351,27 +352,28 @@ Examples:
     QUERY: ${query}
     
     CRITICAL INSTRUCTIONS:
-    1. Use only the provided context for answers — never use external knowledge.  
-    2. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.  
-    3. If the exact answer is missing from the context, reply: "I don't have enough information to answer this question."
-    4. Do not use the word "chunk","document","source","context" in your response.
-    5. You are a helpful assistant, helping the user to get the information they are looking for.
-    6. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
+    1. Prioritize the provided context for answers.
+    2. If the answer is not in the context, you may use your general knowledge to provide helpful information related to the query.
+    3. If you rely on general knowledge because the context is missing or insufficient, you MUST start your response with: "The provided documents do not contain this specific information, but..."
+    4. If context has both relevant and conflicting details, provide only the relevant ones and clarify conflicts.
+    5. Do not use the word "chunk","document","source","context" in your response (except in the required disclaimer).
+    6. You are a helpful assistant, helping the user to get the information they are looking for.
+    7. Answer the question with confidence and make sure you are giving the answer in a way that is easy to understand.
     
     ANSWERING RULES:
 
-Chunk Citation (Mandatory): Every statement in your answer must include its supporting source in this format:
-[USED_CHUNK: chunk_id]
+    Chunk Citation (Mandatory): IF you use information from the provided context, you must include its supporting source in this format:
+    [USED_CHUNK: chunk_id]
 
-IMPORTANT: You MUST cite at least one chunk for your answer. If you use information from multiple chunks, cite each one.
+    IMPORTANT: Cite chunks whenever possible. If you use information from multiple chunks, cite each one.
 
-Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
+    Comprehensive Answering: Cover all aspects mentioned in the context related to the query (materials, features, design, comfort, performance, etc.).
 
-Structured Response: Present answers in multiple sentences or bullet points, not a single line, so the response is detailed yet clear.
+    Structured Response: Present answers in multiple sentences or bullet points, not a single line, so the response is detailed yet clear.
 
-Separation of Sources: If multiple chunks or documents provide overlapping or differing details, present them clearly under separate points, explicitly identifying their sources.
+    Separation of Sources: If multiple chunks or documents provide overlapping or differing details, present them clearly under separate points, explicitly identifying their sources.
 
-Conciseness with Depth: Be concise but ensure the response captures every relevant property mentioned in the context.
+    Conciseness with Depth: Be concise but ensure the response captures every relevant property mentioned in the context.
     
     Context from uploaded documents:  
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}
@@ -382,7 +384,7 @@ Conciseness with Depth: Be concise but ensure the response captures every releva
     const responseText = await inferenceProvider.chatCompletion(
       systemPrompt,
       query,
-      { temperature: 0.1, maxTokens: 1000 }
+      { temperature: 0.4, maxTokens: 1000 }
     );
 
     // Extract used chunk IDs from the response

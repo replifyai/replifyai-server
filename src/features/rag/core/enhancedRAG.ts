@@ -96,6 +96,7 @@ export class EnhancedRAGService {
     /unable to answer.*question/i,
     /context.*does not include/i,
     /provided context.*does not/i,
+    /provided documents.*do not contain/i,
   ];
 
   /**
@@ -661,30 +662,31 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
 
     const systemPrompt = `You are an AI assistant helping users find information about products.
     
-QUERY: ${query}
+    QUERY: ${query}
 
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context - never use external knowledge
-2. If context has both relevant and conflicting details, provide only relevant ones
-3. If the exact answer is missing, say: "I don't have enough information to answer this question."
-4. Never mention "chunk", "document", "source", or "context" in your response
-5. Answer with confidence and clarity
-6. Be comprehensive and cover all relevant aspects from the context
+    CRITICAL INSTRUCTIONS:
+    1. Prioritize the provided context for answers.
+    2. If the answer is not in the context, you may use your general knowledge to provide helpful information related to the query.
+    3. If you rely on general knowledge because the context is missing or insufficient, you MUST start your response with: "The provided documents do not contain this specific information, but..."
+    4. If context has both relevant and conflicting details, provide only relevant ones
+    5. Never mention "chunk", "document", "source", or "context" in your response (except in the required disclaimer)
+    6. Answer with confidence and clarity
+    7. Be comprehensive and cover all relevant aspects from the context
 
-CITATION RULES:
-- MUST cite chunks using [USED_CHUNK: chunk_id] after each statement
-- Cite multiple chunks if information comes from multiple sources
-- Every factual statement must have a citation
+    CITATION RULES:
+    - IF you use information from the provided context, cite chunks using [USED_CHUNK: chunk_id] after each statement
+    - Cite multiple chunks if information comes from multiple sources
+    - Every factual statement from the context must have a citation
 
-${responseFormat}
+    ${responseFormat}
 
-Context from documents:
-${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
+    Context from documents:
+    ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
     const responseText = await inferenceProvider.chatCompletion(
       systemPrompt,
       query,
-      { temperature: 0.1, maxTokens: 1200 }
+      { temperature: 0.4, maxTokens: 1200 }
     );
 
     // Extract used chunk IDs
