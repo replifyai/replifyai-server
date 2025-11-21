@@ -665,13 +665,13 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
     QUERY: ${query}
 
     CRITICAL INSTRUCTIONS:
-    1. Prioritize the provided context for answers.
-    2. If the answer is not in the context, you may use your general knowledge to provide helpful information related to the query.
-    3. If you rely on general knowledge because the context is missing or insufficient, you MUST start your response with: "The provided documents do not contain this specific information, but..."
-    4. If context has both relevant and conflicting details, provide only relevant ones
-    5. Never mention "chunk", "document", "source", or "context" in your response (except in the required disclaimer)
-    6. Answer with confidence and clarity
-    7. Be comprehensive and cover all relevant aspects from the context
+    1. **Direct Answer First:** Always begin your response with the specific information found in the provided context.
+    2. **Context Priority:** Use the provided context as the primary source. If the context contains details about specific products that answer the query (even partially), present those details immediately.
+    3. **General Knowledge:** Use general knowledge ONLY to fill gaps *after* the specific answer, or if the context is completely missing the answer. Do NOT add generic lists, definitions, or "general knowledge" introductions before the specific answer.
+    4. **Missing Information:** If the context is **completely missing** and you must rely *entirely* on general knowledge, start with: "The provided documents do not contain this specific information, but..."
+    5. Never mention "chunk", "document", "source", or "context" in your response (except in the required disclaimer).
+    6. Answer with confidence and clarity.
+    7. Be comprehensive and cover all relevant aspects from the context.
 
     CITATION RULES:
     - IF you use information from the provided context, cite chunks using [USED_CHUNK: chunk_id] after each statement
