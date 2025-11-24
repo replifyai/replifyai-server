@@ -18,6 +18,7 @@ import { createEmbedding, createBatchEmbeddings } from "../providers/embeddingSe
 import { qdrantService, SearchResult } from "../providers/qdrantHybrid.js";
 import { inferenceProvider } from "../../../services/llm/inference.js";
 import { detectResponseFormat } from "../../../utils/formatDetection.js";
+import { encodeMetadataToToon } from "../../../utils/toonFormatter.js";
 
 export interface EnhancedRAGOptions {
   retrievalCount?: number;
@@ -303,19 +304,58 @@ Return ONLY one word: "table" or "markdown".`;
         // Take top N compressed chunks
         const topCompressed = compressed.slice(0, finalChunkCount);
         
-        finalChunks = topCompressed.map((chunk, index) => ({
-          id: `chunk_${index}`,
-          content: `[CHUNK_ID: chunk_${index}] [From: ${rankedChunks.find(r => r.chunkId === chunk.originalChunkId)?.filename || 'unknown'}]\n${chunk.compressedContent}`,
-          originalData: rankedChunks.find(r => r.chunkId === chunk.originalChunkId)!,
-        }));
+        finalChunks = topCompressed.map((chunk, index) => {
+          const sourceChunk = rankedChunks.find(r => r.chunkId === chunk.originalChunkId);
+          const filename = sourceChunk?.filename || 'unknown';
+          let content = `[CHUNK_ID: chunk_${index}] [From: ${filename}]\n${chunk.compressedContent}`;
+
+          const metadataForEncoding = sourceChunk?.metadata ?? chunk.metadata;
+          if (metadataForEncoding) {
+            const toonMetadata = encodeMetadataToToon(metadataForEncoding, filename);
+            if (toonMetadata) {
+              content += `\n\nMetadata (Toon):\n${toonMetadata}`;
+            }
+          }
+
+          const fallbackSource: RankedResult = sourceChunk ?? {
+            chunkId: chunk.originalChunkId,
+            documentId: chunk.metadata?.documentId ?? 0,
+            content: chunk.originalContent,
+            filename,
+            score: chunk.relevanceScore,
+            metadata: metadataForEncoding,
+            relevanceScore: chunk.relevanceScore,
+            completenessScore: chunk.relevanceScore,
+            specificityScore: chunk.relevanceScore,
+            finalScore: chunk.relevanceScore,
+            rerankedPosition: index + 1,
+          };
+
+          return {
+            id: `chunk_${index}`,
+            content,
+            originalData: fallbackSource,
+          };
+        });
 
       } else {
         // No compression, use top ranked chunks
-        finalChunks = rankedChunks.slice(0, finalChunkCount).map((chunk, index) => ({
-          id: `chunk_${index}`,
-          content: `[CHUNK_ID: chunk_${index}] [From: ${chunk.filename}]\n${chunk.content}`,
-          originalData: chunk,
-        }));
+        finalChunks = rankedChunks.slice(0, finalChunkCount).map((chunk, index) => {
+          let content = `[CHUNK_ID: chunk_${index}] [From: ${chunk.filename}]\n${chunk.content}`;
+
+          if (chunk.metadata) {
+            const toonMetadata = encodeMetadataToToon(chunk.metadata, chunk.filename);
+            if (toonMetadata) {
+              content += `\n\nMetadata (Toon):\n${toonMetadata}`;
+            }
+          }
+
+          return {
+            id: `chunk_${index}`,
+            content,
+            originalData: chunk,
+          };
+        });
       }
 
       // ==================== Step 5: Skip Generation if Requested ====================

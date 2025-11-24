@@ -21,6 +21,7 @@
     "@google/generative-ai": "^0.24.1",
     "@neondatabase/serverless": "^0.10.4",
     "@qdrant/js-client-rest": "^1.15.0",
+    "@toon-format/toon": "^1.4.0",
     "@types/multer": "^1.4.13",
     "@types/pdf-parse": "^1.1.5",
     "axios": "^1.12.2",

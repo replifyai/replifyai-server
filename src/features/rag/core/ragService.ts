@@ -6,6 +6,7 @@ import { openai } from "../../../services/llm/openai.js";
 import { env } from "../../../env.js";
 import { enhancedRAGService, EnhancedRAGOptions } from "./enhancedRAG.js";
 import { detectResponseFormat } from "../../../utils/formatDetection.js";
+import { encodeMetadataToToon } from "../../../utils/toonFormatter.js";
 
 export interface ContextMissingAnalysis {
   isContextMissing: boolean;
@@ -238,7 +239,10 @@ Examples:
 
         // Add complete metadata if available
         if (result.metadata) {
-          contextContent += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
+          const toonMetadata = encodeMetadataToToon(result.metadata, result.filename);
+          if (toonMetadata) {
+            contextContent += `\n\nMetadata (Toon):\n${toonMetadata}`;
+          }
         }
 
         return {
@@ -568,7 +572,10 @@ Examples:
       const contextChunks = sortedChunks.map((result, index) => {
         let content = `[CHUNK_ID: chunk_${index}] [From: ${result.filename}]\n${result.content}`;
         if (result.metadata) {
-          content += `\n\nMetadata:\n${JSON.stringify(result.metadata, null, 2)}`;
+          const toonMetadata = encodeMetadataToToon(result.metadata, result.filename);
+          if (toonMetadata) {
+            content += `\n\nMetadata (Toon):\n${toonMetadata}`;
+          }
         }
         return { id: `chunk_${index}`, content, originalData: result };
       });
