@@ -537,15 +537,32 @@ Return ONLY one word: "table" or "markdown".`;
       const query = searchQueries[i];
       const embedding = queryEmbeddings[i];
 
-      const results = await qdrantService.searchSimilar(
+      // 1. Search WITH product filter (if product detected) - High precision for detected product
+      const filteredPromise = productName?.trim() 
+        ? qdrantService.searchSimilar(
+            embedding,
+            retrievalCount,
+            similarityThreshold,
+            productName.trim()
+          )
+        : Promise.resolve([]);
+
+      // 2. Search WITHOUT product filter - High recall (safety net if detection is wrong)
+      // We use a slightly lower count for the broad search to avoid noise, but enough to catch missed items
+      const unfilteredPromise = qdrantService.searchSimilar(
         embedding,
-        retrievalCount,
+        retrievalCount, 
         similarityThreshold,
-        productName?.trim()
+        undefined
       );
 
+      const [filteredResults, unfilteredResults] = await Promise.all([filteredPromise, unfilteredPromise]);
+
+      // Merge results (Filtered first as they are likely more relevant if detection is correct)
+      const combinedResults = [...filteredResults, ...unfilteredResults];
+
       // Add unique results
-      for (const result of results) {
+      for (const result of combinedResults) {
         if (!seenChunkIds.has(result.chunkId)) {
           allResults.push(result);
           seenChunkIds.add(result.chunkId);
