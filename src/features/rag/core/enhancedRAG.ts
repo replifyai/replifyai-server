@@ -119,7 +119,7 @@ Return ONLY one word: "table" or "markdown".`;
         "Determine format",
         { temperature: 0, maxTokens: 10 }
       );
-      
+
       const normalized = result.toLowerCase().trim();
       if (normalized.includes('table')) return 'table';
       return 'markdown';
@@ -196,12 +196,12 @@ Return ONLY one word: "table" or "markdown".`;
       // ==================== Step 2: Multi-Query Retrieval ====================
       const retrievalStart = Date.now();
       let allRetrievedChunks: SearchResult[];
-      
+
       // Handle different query types with appropriate retrieval strategies
       if (expandedQuery.isProductCatalogQuery) {
         console.log(`\n📚 Product Catalog Query Mode`);
         console.log(`  - Retrieving diverse product information`);
-        
+
         // For catalog queries, increase retrieval count and lower threshold to get diverse results
         allRetrievedChunks = await this.catalogRetrieval(
           expandedQuery.searchQueries,
@@ -211,15 +211,27 @@ Return ONLY one word: "table" or "markdown".`;
       } else if (expandedQuery.isMultiProductQuery && expandedQuery.comparisonProducts) {
         console.log(`\n🔄 Multi-Product Comparison Mode`);
         console.log(`  - Products: ${expandedQuery.comparisonProducts.join(' vs ')}`);
-        
+
         allRetrievedChunks = await this.multiProductRetrieval(
           expandedQuery.searchQueries,
           expandedQuery.comparisonProducts,
           retrievalCount,
           similarityThreshold
         );
+      } else if (expandedQuery.detectedProducts.length > 1) {
+        // Multiple specific products detected (e.g., "Details of seating combos" -> 2 products)
+        // Retrieve chunks for ALL detected products, not just the first one
+        console.log(`\n🎯 Multi-Specific-Product Mode`);
+        console.log(`  - Products: ${expandedQuery.detectedProducts.join(', ')}`);
+
+        allRetrievedChunks = await this.multiProductRetrieval(
+          expandedQuery.searchQueries,
+          expandedQuery.detectedProducts,
+          retrievalCount,
+          similarityThreshold
+        );
       } else {
-        // Standard multi-query retrieval
+        // Standard multi-query retrieval (single product or no product)
         allRetrievedChunks = await this.multiQueryRetrieval(
           expandedQuery.searchQueries,
           expandedQuery.detectedProducts[0] || productName,
@@ -227,7 +239,7 @@ Return ONLY one word: "table" or "markdown".`;
           similarityThreshold
         );
       }
-      
+
       performance.retrieval = Date.now() - retrievalStart;
 
       if (allRetrievedChunks.length === 0) {
@@ -254,17 +266,17 @@ Return ONLY one word: "table" or "markdown".`;
       // ==================== Step 3: Reranking ====================
       let rankedChunks: RankedResult[];
       const rerankStart = Date.now();
-      
+
       if (useReranking) {
         // ⚡ OPTIMIZATION: Use fast reranking for simple queries
-        const isSimpleQuery = !expandedQuery.isMultiProductQuery && 
-                              expandedQuery.searchQueries.length <= 2 &&
-                              expandedQuery.queryType !== 'comparison';
-        
+        const isSimpleQuery = !expandedQuery.isMultiProductQuery &&
+          expandedQuery.searchQueries.length <= 2 &&
+          expandedQuery.queryType !== 'comparison';
+
         if (isSimpleQuery) {
           rankedChunks = reranker.fastRerank(
-            allRetrievedChunks, 
-            expandedQuery.normalizedQuery, 
+            allRetrievedChunks,
+            expandedQuery.normalizedQuery,
             Math.min(finalChunkCount * 2, allRetrievedChunks.length)
           );
         } else {
@@ -278,8 +290,8 @@ Return ONLY one word: "table" or "markdown".`;
       } else {
         // Use fast reranking
         rankedChunks = reranker.fastRerank(
-          allRetrievedChunks, 
-          expandedQuery.normalizedQuery, 
+          allRetrievedChunks,
+          expandedQuery.normalizedQuery,
           finalChunkCount * 2
         );
         performance.reranking = Date.now() - rerankStart;
@@ -303,7 +315,7 @@ Return ONLY one word: "table" or "markdown".`;
 
         // Take top N compressed chunks
         const topCompressed = compressed.slice(0, finalChunkCount);
-        
+
         finalChunks = topCompressed.map((chunk, index) => {
           const sourceChunk = rankedChunks.find(r => r.chunkId === chunk.originalChunkId);
           const filename = sourceChunk?.filename || 'unknown';
@@ -390,7 +402,7 @@ Return ONLY one word: "table" or "markdown".`;
 
       // Determine response style
       let responseStyle: 'markdown' | 'table' | 'text' = formatAsMarkdown ? 'markdown' : 'text';
-      
+
       if (formatAsMarkdown) {
         // Analyze if user wants a table
         const detectedStyle = await this.analyzeResponseStyle(query);
@@ -398,7 +410,7 @@ Return ONLY one word: "table" or "markdown".`;
           responseStyle = 'table';
         }
       }
-      
+
       // Choose appropriate generation strategy based on query type
       if (expandedQuery.isProductCatalogQuery) {
         // Use catalog-specific generation for product overview queries
@@ -420,7 +432,7 @@ Return ONLY one word: "table" or "markdown".`;
       } else {
         responseData = await this.generateSalesAgentResponse(expandedQuery.normalizedQuery, finalChunks);
       }
-      
+
       performance.generation = Date.now() - genStart;
       performance.total = Date.now() - startTime;
 
@@ -464,18 +476,18 @@ Return ONLY one word: "table" or "markdown".`;
     similarityThreshold: number
   ): Promise<SearchResult[]> {
     console.log(`📚 Catalog retrieval with ${searchQueries.length} queries`);
-    
+
     // Create embeddings for all queries in batch
     const queryEmbeddings = await createBatchEmbeddings(searchQueries);
-    
+
     // Use a Map to track unique products and their best chunks
     const productChunks = new Map<string, SearchResult[]>();
     const seenChunkIds = new Set<number>();
-    
+
     for (let i = 0; i < searchQueries.length; i++) {
       const query = searchQueries[i];
       const embedding = queryEmbeddings[i];
-      
+
       // Search without product filter to get diverse results
       const results = await qdrantService.searchSimilar(
         embedding,
@@ -483,17 +495,17 @@ Return ONLY one word: "table" or "markdown".`;
         similarityThreshold,
         undefined // No product filter for catalog queries
       );
-      
+
       // Group results by product
       for (const result of results) {
         if (seenChunkIds.has(result.chunkId)) continue;
-        
+
         const productName = result.metadata?.productName || 'general';
-        
+
         if (!productChunks.has(productName)) {
           productChunks.set(productName, []);
         }
-        
+
         const chunks = productChunks.get(productName)!;
         // Keep top 3 chunks per product to ensure diversity
         if (chunks.length < 3) {
@@ -502,22 +514,23 @@ Return ONLY one word: "table" or "markdown".`;
         }
       }
     }
-    
+
     // Flatten the results, ensuring we have representation from multiple products
     const allResults: SearchResult[] = [];
     for (const [productName, chunks] of productChunks) {
       console.log(`  - Product "${productName}": ${chunks.length} chunks`);
       allResults.push(...chunks);
     }
-    
+
     console.log(`📚 Total unique products found: ${productChunks.size}`);
     console.log(`📚 Total chunks retrieved: ${allResults.length}`);
-    
+
     return allResults;
   }
 
   /**
    * Multi-query retrieval - retrieve using multiple query variations and merge results
+   * When a specific product is detected (locked), only retrieve chunks for that product.
    */
   private async multiQueryRetrieval(
     searchQueries: string[],
@@ -533,41 +546,49 @@ Return ONLY one word: "table" or "markdown".`;
     const allResults: SearchResult[] = [];
     const seenChunkIds = new Set<number>();
 
+    // Determine if we have a locked product (specific product detected)
+    const hasLockedProduct = productName?.trim() !== '';
+
+    if (hasLockedProduct) {
+      console.log(`🔒 Product locked: "${productName}" - retrieving only matching chunks`);
+    }
+
     for (let i = 0; i < searchQueries.length; i++) {
       const query = searchQueries[i];
       const embedding = queryEmbeddings[i];
 
-      // 1. Search WITH product filter (if product detected) - High precision for detected product
-      const filteredPromise = productName?.trim() 
-        ? qdrantService.searchSimilar(
-            embedding,
-            retrievalCount,
-            similarityThreshold,
-            productName.trim()
-          )
-        : Promise.resolve([]);
+      let results: SearchResult[];
 
-      // 2. Search WITHOUT product filter - High recall (safety net if detection is wrong)
-      // We use a slightly lower count for the broad search to avoid noise, but enough to catch missed items
-      const unfilteredPromise = qdrantService.searchSimilar(
-        embedding,
-        retrievalCount, 
-        similarityThreshold,
-        undefined
-      );
-
-      const [filteredResults, unfilteredResults] = await Promise.all([filteredPromise, unfilteredPromise]);
-
-      // Merge results (Filtered first as they are likely more relevant if detection is correct)
-      const combinedResults = [...filteredResults, ...unfilteredResults];
+      if (hasLockedProduct) {
+        // 🔒 LOCKED PRODUCT MODE: Only search with product filter
+        // Skip unfiltered search to prevent irrelevant products from polluting context
+        results = await qdrantService.searchSimilar(
+          embedding,
+          retrievalCount,
+          similarityThreshold,
+          productName.trim()
+        );
+      } else {
+        // NO PRODUCT LOCKED: Use broad search without filter
+        results = await qdrantService.searchSimilar(
+          embedding,
+          retrievalCount,
+          similarityThreshold,
+          undefined
+        );
+      }
 
       // Add unique results
-      for (const result of combinedResults) {
+      for (const result of results) {
         if (!seenChunkIds.has(result.chunkId)) {
           allResults.push(result);
           seenChunkIds.add(result.chunkId);
         }
       }
+    }
+
+    if (hasLockedProduct) {
+      console.log(`🔒 Retrieved ${allResults.length} chunks for locked product "${productName}"`);
     }
 
     return allResults;
@@ -598,7 +619,7 @@ Return ONLY one word: "table" or "markdown".`;
         console.log(`⚠️ No queries found for product "${product}", skipping retrieval.`);
         continue;
       }
-      
+
       // 🚀 Ensure whitespace is trimmed from product name before retrieval
       const trimmedProduct = product.trim();
 
@@ -608,6 +629,7 @@ Return ONLY one word: "table" or "markdown".`;
       const embeddings = await createBatchEmbeddings(productQueries);
 
       // Search with each query
+      let productResults: SearchResult[] = [];
       for (let i = 0; i < productQueries.length; i++) {
         const query = productQueries[i];
         const embedding = embeddings[i];
@@ -622,8 +644,31 @@ Return ONLY one word: "table" or "markdown".`;
         // Add unique results
         for (const result of results) {
           if (!seenChunkIds.has(result.chunkId)) {
+            productResults.push(result);
             allResults.push(result);
             seenChunkIds.add(result.chunkId);
+          }
+        }
+      }
+
+      // 🔄 FALLBACK: If no results for this product, try without filter
+      // This handles case where product name doesn't exactly match in Qdrant
+      if (productResults.length === 0) {
+        console.log(`⚠️ No chunks found for "${trimmedProduct}" - trying unfiltered search...`);
+        for (let i = 0; i < productQueries.length; i++) {
+          const embedding = embeddings[i];
+          const results = await qdrantService.searchSimilar(
+            embedding,
+            retrievalCount,
+            similarityThreshold,
+            undefined // No filter - rely on query terms
+          );
+
+          for (const result of results) {
+            if (!seenChunkIds.has(result.chunkId)) {
+              allResults.push(result);
+              seenChunkIds.add(result.chunkId);
+            }
           }
         }
       }
@@ -637,7 +682,7 @@ Return ONLY one word: "table" or "markdown".`;
    */
   private groupQueriesByProduct(queries: string[], products: string[]): Record<string, string[]> {
     const groups: Record<string, string[]> = {};
-    
+
     // Initialize groups
     products.forEach(product => {
       groups[product] = [];
@@ -667,7 +712,7 @@ Return ONLY one word: "table" or "markdown".`;
    */
   private countChunksByProduct(chunks: SearchResult[], products: string[]): Record<string, number> {
     const counts: Record<string, number> = {};
-    
+
     products.forEach(product => {
       counts[product] = 0;
     });
@@ -690,9 +735,9 @@ Return ONLY one word: "table" or "markdown".`;
     contextChunks: Array<{ id: string; content: string; originalData: any }>,
     responseStyle: 'markdown' | 'table' | 'text' = 'text'
   ): Promise<{ response: string; usedChunkIds: string[] }> {
-    
+
     let responseFormat = '';
-    
+
     if (responseStyle === 'table') {
       responseFormat = `
 You are a professional technical writer.
@@ -717,33 +762,40 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
 `;
     }
 
-    const systemPrompt = `You are an AI assistant helping users find information about products.
+    const systemPrompt = `You are an AI assistant helping sales agents find product information quickly.
     
     QUERY: ${query}
 
-    CRITICAL INSTRUCTIONS:
-    1. **Direct Answer First:** Always begin your response with the specific information found in the provided context.
-    2. **Context Priority:** Use the provided context as the primary source. If the context contains details about specific products that answer the query (even partially), present those details immediately.
-    3. **General Knowledge:** Use general knowledge ONLY to fill gaps *after* the specific answer, or if the context is completely missing the answer. Do NOT add generic lists, definitions, or "general knowledge" introductions before the specific answer.
-    4. **Missing Information:** If the context is **completely missing** and you must rely *entirely* on general knowledge, start with: "The provided documents do not contain this specific information, but..."
-    5. Never mention "chunk", "document", "source", or "context" in your response (except in the required disclaimer).
-    6. Answer with confidence and clarity.
-    7. Be comprehensive and cover all relevant aspects from the context.
+    RESPONSE RULES (CRITICAL):
+    1. **BE CONCISE**: Maximum 60-80 words. Sales agents need quick, scannable answers.
+    2. **Product names in bold**: Use **Product Name** format.
+    3. **Key differentiator**: 1 line per product explaining WHY it fits the query.
+    4. **No repetition**: Don't repeat the same features for multiple products.
+    5. **No filler**: Skip phrases like "Additionally", "Furthermore", "It's worth noting".
+    6. Never mention "chunk", "document", "source", or "context".
 
-    CITATION RULES:
-    - IF you use information from the provided context, cite chunks using [USED_CHUNK: chunk_id] after each statement
-    - Cite multiple chunks if information comes from multiple sources
-    - Every factual statement from the context must have a citation
+    CITATION RULES (MANDATORY):
+    - After EACH factual statement from context, add: [USED_CHUNK: chunk_id]
+    - If info comes from multiple chunks, cite all: [USED_CHUNK: chunk_0, chunk_1]
+    - Every product detail MUST have a citation
+    - Citations will be removed before showing to user
+
+    FORMAT EXAMPLE:
+    "For [use case]:
+    • **Product A** — [key benefit] [USED_CHUNK: chunk_0]
+    • **Product B** — [key benefit] [USED_CHUNK: chunk_2]
+    
+    Best for [specific need]: Product A."
 
     ${responseFormat}
 
-    Context from documents:
+    Context:
     ${contextChunks.map(chunk => chunk.content).join('\n\n---\n\n')}`;
 
     const responseText = await inferenceProvider.chatCompletion(
       systemPrompt,
       query,
-      { temperature: 0.4, maxTokens: 1200 }
+      { temperature: 0.4, maxTokens: 500 }
     );
 
     // Extract used chunk IDs
@@ -915,7 +967,7 @@ ${organizedContext}`;
   ): Promise<{ response: string; usedChunkIds: string[] }> {
     // Group chunks by product to understand what products are available
     const productInfo = new Map<string, Array<{ id: string; content: string }>>();
-    
+
     for (const chunk of contextChunks) {
       const productName = chunk.originalData.metadata?.productName || 'General Information';
       if (!productInfo.has(productName)) {
@@ -1067,18 +1119,19 @@ IMPORTANT: Cite chunks using [USED_CHUNK: chunk_id]`;
   }
 
   /**
-   * Prepare sources from chunks
+   * Prepare sources from chunks - deduplicate by product name (filename)
    */
   private prepareSources(
     chunks: Array<{ id: string; content: string; originalData: any }>
   ): EnhancedRAGResponse['sources'] {
-    const uniqueSourceUrls = new Set<string>();
+    // Deduplicate by filename (product name) to show all unique products
+    const seenProducts = new Set<string>();
     return chunks
       .filter(chunk => {
-        const sourceUrl = chunk.originalData.metadata?.sourceUrl;
-        if (!sourceUrl) return true;
-        if (uniqueSourceUrls.has(sourceUrl)) return false;
-        uniqueSourceUrls.add(sourceUrl);
+        const filename = chunk.originalData.filename;
+        if (!filename) return true;
+        if (seenProducts.has(filename)) return false;
+        seenProducts.add(filename);
         return true;
       })
       .map(chunk => ({

@@ -38,7 +38,7 @@ export interface QueryExpansionOptions {
 }
 
 export class AdvancedQueryExpander {
-  
+
   /**
    * Main expansion function - orchestrates all expansion techniques
    */
@@ -48,14 +48,28 @@ export class AdvancedQueryExpander {
   ): Promise<ExpandedQuery> {
     const { companyContext, productName, maxQueries = 5 } = options;
 
-    // Step 1: Detect and normalize product names with fuzzy matching
-    // ⚡ OPTIMIZATION: Use LLM to verify product matches if fuzzy matching is ambiguous
-    // This improves accuracy for cases like "Pro" vs non-Pro where fuzzy matching might be too loose
-    let detectedProducts = await this.detectProductNames(query, productName);
-    
-    if (detectedProducts.length > 0) {
-        // Verify matches with LLM to filter out incorrect fuzzy matches
+    // Step 1: 🧠 SMART PRODUCT DETECTION using LLM
+    // First, determine if this is a specific product query or a category/recommendation query
+    // This prevents wrong product locking on queries like "which is the best back support cushion"
+    let detectedProducts: string[] = [];
+
+    const smartDetection = await this.smartProductDetection(query, productName);
+
+    if (smartDetection.isSpecificProductQuery && smartDetection.detectedProducts.length > 0) {
+      // User is asking about specific product(s) - use LLM-detected products
+      detectedProducts = smartDetection.detectedProducts;
+      console.log(`🎯 Specific product query detected - Products: ${detectedProducts.join(', ')}`);
+    } else if (!smartDetection.isSpecificProductQuery) {
+      // User is asking for recommendations/category - don't lock to any product
+      console.log(`🔓 Category/recommendation query - No product lock`);
+      console.log(`   Reason: ${smartDetection.reason}`);
+    } else {
+      // Fallback to fuzzy matching if LLM couldn't determine
+      console.log(`⚠️ Smart detection inconclusive, falling back to fuzzy matching`);
+      detectedProducts = await this.detectProductNames(query, productName);
+      if (detectedProducts.length > 0) {
         detectedProducts = await this.verifyProductMatchesWithLLM(query, detectedProducts);
+      }
     }
 
     // Step 2: Normalize query by replacing misspellings with correct product names
@@ -89,13 +103,27 @@ export class AdvancedQueryExpander {
 
     // Step 4: Generate multiple search queries using different perspectives
     let searchQueries: string[];
-    
-    // 🚀 CRITICAL FIX: If we have a strong single product match (Pro version vs Standard),
-    // force the use of that specific product name in search queries to avoid mixing up variants.
-    // This is especially important for "Pro" vs non-Pro versions.
-    const singleExactProductMatch = detectedProducts.find(p => 
+
+    // 🔍 Detect if this is a recommendation/category query where we should NOT lock to a single product
+    // These queries ask for suggestions across a category rather than asking about a specific named product
+    const isRecommendationQuery = this.isRecommendationOrCategoryQuery(normalizedQuery);
+
+    // 🚀 CRITICAL FIX: Only lock to a specific product when:
+    // 1. User explicitly mentions a specific product name (e.g., "Price of Mattress topper")
+    // 2. NOT a recommendation/category query (e.g., "best back support cushion for car")
+    // 3. Either it's a "Pro" variant match OR exactly 1 product detected
+    let singleExactProductMatch: string | null = null;
+
+    if (!isRecommendationQuery) {
+      singleExactProductMatch = detectedProducts.find(p =>
         p.toLowerCase().includes('pro') && normalizedQuery.toLowerCase().includes('pro')
-    ) || (detectedProducts.length === 1 ? detectedProducts[0] : null);
+      ) || (detectedProducts.length === 1 ? detectedProducts[0] : null);
+    }
+
+    if (isRecommendationQuery) {
+      console.log(`🔓 Recommendation/category query detected - NOT locking to single product`);
+      console.log(`   Query: "${normalizedQuery}"`);
+    }
 
     if (isCatalog) {
       // For product catalog queries, generate diverse queries to retrieve all products
@@ -122,16 +150,16 @@ export class AdvancedQueryExpander {
         companyContext,
         maxQueries
       );
-      
-      // 🚀 FORCE EXACT MATCH: If we have a single detected product, ensure it's preserved EXACTLY in queries
+
+      // 🔒 PRODUCT LOCK: Only lock when user asks about a specific product, NOT for recommendations
       if (singleExactProductMatch) {
         console.log(`🔒 Locking search to exact product: "${singleExactProductMatch}"`);
         searchQueries = searchQueries.map(q => {
-            // If the query doesn't contain the exact product name, append it
-            if (!q.includes(singleExactProductMatch)) {
-                return `${q} "${singleExactProductMatch}"`; // Quote it for emphasis if supported, or just append
-            }
-            return q;
+          // If the query doesn't contain the exact product name, append it
+          if (!q.includes(singleExactProductMatch)) {
+            return `${q} "${singleExactProductMatch}"`; // Quote it for emphasis if supported, or just append
+          }
+          return q;
         });
       }
     }
@@ -202,17 +230,103 @@ Result: {"selected": ["Frido Dual Gel Insoles Pro"]}
 
       const content = response.choices[0]?.message?.content || '{"selected": []}';
       const result = JSON.parse(content);
-      
+
       // If LLM returns valid selection, use it. Otherwise fall back to original candidates.
       if (result.selected && Array.isArray(result.selected) && result.selected.length > 0) {
         console.log(`🧠 LLM Refined Product Selection: ${JSON.stringify(result.selected)} (Original: ${JSON.stringify(candidates)})`);
         return result.selected;
       }
-      
+
       return candidates;
     } catch (error) {
       console.error('❌ LLM product verification failed:', error);
       return candidates;
+    }
+  }
+
+  /**
+   * 🧠 SMART PRODUCT DETECTION using LLM
+   * 
+   * This is the core intelligence for product locking. It determines:
+   * 1. Is this query about a SPECIFIC product? (e.g., "Price of Mattress topper")
+   * 2. Or is it about a CATEGORY/RECOMMENDATION? (e.g., "best back support cushion for car")
+   * 
+   * If specific product → identify and return the product name(s)
+   * If category → return empty, no product lock
+   */
+  private async smartProductDetection(query: string, productHint?: string): Promise<{
+    isSpecificProductQuery: boolean;
+    detectedProducts: string[];
+    reason: string;
+  }> {
+    try {
+      // Get the product catalog for reference
+      const allProducts = productCatalog.getAllProductNames();
+
+      // Limit to first 100 products to avoid token limits
+      const productList = allProducts.slice(0, 100).join('\n');
+
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert product query analyzer. Your task is to determine if a user query is about:
+
+1. **SPECIFIC PRODUCT(S)**: User is asking about a particular named product
+   - Examples: "Price of Mattress Topper", "Features of Frido Ultimate Pillow", "Is Frido Coccyx Cushion good?"
+   
+2. **CATEGORY/RECOMMENDATION**: User is asking for suggestions, recommendations, or the "best" product for a use case
+   - Examples: "Which is the best back support cushion for car?", "Recommend a cushion for office", "Best insole for running"
+   - These queries should NOT lock to any specific product - they need to compare ALL relevant products
+
+CRITICAL: If the query asks "which is best", "recommend", "suggest", "looking for", "need a...for" → This is CATEGORY, NOT specific product!
+
+Available Products (for reference):
+${productList}
+
+${productHint ? `User also mentioned: "${productHint}"` : ''}
+
+Analyze the query and return JSON:
+{
+  "isSpecificProductQuery": true/false,
+  "detectedProducts": ["Product Name 1", "Product Name 2"] or [] if category query,
+  "reason": "Brief explanation of your decision"
+}
+
+RULES:
+1. If user mentions a specific product by name (even partial) → isSpecificProductQuery: true, detect the product
+2. If user asks for recommendation/best/suggest → isSpecificProductQuery: false, detectedProducts: []
+3. Only return products that EXACTLY match names from the product list
+4. Be VERY careful - "back support cushion" is a CATEGORY, not a specific product name
+5. Do NOT match generic words like "support", "cushion", "chair" to specific products`
+          },
+          { role: 'user', content: query }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 300,
+        response_format: { type: "json_object" }
+      });
+
+      const content = response.choices[0]?.message?.content || '{}';
+      const result = JSON.parse(content);
+
+      console.log(`🧠 Smart Detection: ${result.isSpecificProductQuery ? 'SPECIFIC PRODUCT' : 'CATEGORY'} - ${result.reason}`);
+
+      return {
+        isSpecificProductQuery: result.isSpecificProductQuery === true,
+        detectedProducts: Array.isArray(result.detectedProducts) ? result.detectedProducts : [],
+        reason: result.reason || 'No reason provided'
+      };
+
+    } catch (error) {
+      console.error('❌ Smart product detection failed:', error);
+      // On error, return as category query (safer - won't lock to wrong product)
+      return {
+        isSpecificProductQuery: false,
+        detectedProducts: [],
+        reason: 'Error in detection - defaulting to category query'
+      };
     }
   }
 
@@ -268,9 +382,9 @@ Respond with ONLY a JSON object:
 
       const parsed = JSON.parse(content);
       const isCatalog = parsed.isCatalog === true;
-      
+
       console.log(`🔍 Catalog Detection: "${query}" → ${isCatalog ? '✅ CATALOG' : '❌ NOT CATALOG'}`);
-      
+
       return isCatalog;
 
     } catch (error) {
@@ -343,9 +457,9 @@ Be strict: Only return true if the query explicitly asks to compare or contrast 
 
       const parsed = JSON.parse(content);
       const isComparison = parsed.isComparison === true;
-      
+
       console.log(`🔍 Comparison Detection (GPT-4o-mini): "${query}" → ${isComparison ? '✅ COMPARISON' : '❌ NOT COMPARISON'}`);
-      
+
       return isComparison;
 
     } catch (error) {
@@ -387,7 +501,7 @@ Be strict: Only return true if the query explicitly asks to compare or contrast 
     const comparisonAspect = this.extractComparisonAspect(query);
 
     // Parallelize LLM calls for all products
-    const queryPromises = products.map(product => 
+    const queryPromises = products.map(product =>
       openai.chat.completions.create({
         model: 'gpt-4o-mini', // ⚡ OPTIMIZATION: Use faster model
         messages: [
@@ -497,9 +611,9 @@ Return JSON:
 
       const content = response.choices[0]?.message?.content || '{"queries": []}';
       const result = JSON.parse(content);
-      
+
       console.log(`📚 Generated ${result.queries?.length || 0} catalog search queries`);
-      
+
       return result.queries || [query];
     } catch (error) {
       console.error('Error generating catalog queries:', error);
@@ -520,7 +634,7 @@ Return JSON:
    */
   private extractComparisonAspect(query: string): string {
     const lowerQuery = query.toLowerCase();
-    
+
     // Common comparison aspects
     const aspects = {
       'price': ['price', 'cost', 'expensive', 'cheaper', 'affordable'],
@@ -557,11 +671,11 @@ Return JSON:
 
     // Extract products from query
     const queryMatches = productCatalog.fuzzyMatchProducts(query, 0.4, 3);
-    
+
     if (queryMatches.length > 0) {
-        console.log(`🔍 Detected Products in Query: ${queryMatches.map(m => `"${m.product.name}" (Score: ${m.score.toFixed(2)})`).join(', ')}`);
+      console.log(`🔍 Detected Products in Query: ${queryMatches.map(m => `"${m.product.name}" (Score: ${m.score.toFixed(2)})`).join(', ')}`);
     } else {
-        console.log(`🔍 No products detected in query: "${query}"`);
+      console.log(`🔍 No products detected in query: "${query}"`);
     }
 
     for (const match of queryMatches) {
@@ -582,7 +696,7 @@ Return JSON:
     for (const product of detectedProducts) {
       // Create regex patterns for variations of the product name
       const patterns = this.createSearchPatterns(product);
-      
+
       for (const pattern of patterns) {
         const regex = new RegExp(pattern, 'gi');
         if (regex.test(normalized)) {
@@ -611,6 +725,67 @@ Return JSON:
     }
 
     return patterns;
+  }
+
+  /**
+   * Detect if query is asking for recommendations or suggestions across a product category
+   * These queries should NOT lock to a single product - they need to retrieve multiple products for comparison
+   * 
+   * Examples:
+   * - "Which is the best back support cushion for car?" → TRUE (recommendation query)
+   * - "Recommend a cushion for office use" → TRUE
+   * - "Best mattress topper under 5000" → TRUE
+   * - "Price of Mattress topper" → FALSE (specific product query)
+   * - "Tell me about Frido Ultimate Pillow" → FALSE (specific product query)
+   */
+  private isRecommendationOrCategoryQuery(query: string): boolean {
+    const lowerQuery = query.toLowerCase();
+
+    // Patterns that indicate recommendation/category queries
+    const recommendationPatterns = [
+      /which\s+(is\s+)?(the\s+)?best/i,           // "which is the best...", "which best..."
+      /what\s+(is\s+)?(the\s+)?best/i,            // "what is the best...", "what best..."
+      /recommend\s+(a|me|some)/i,                  // "recommend a...", "recommend me..."
+      /suggest\s+(a|me|some)/i,                    // "suggest a...", "suggest me..."
+      /best\s+\w+\s+(for|under|below|around)/i,   // "best cushion for...", "best mattress under..."
+      /which\s+\w+\s+(should|would|can)\s+i/i,    // "which product should I buy"
+      /good\s+\w+\s+for/i,                         // "good cushion for..."
+      /suitable\s+\w+\s+for/i,                     // "suitable product for..."
+      /looking\s+for\s+(a|the|some)/i,            // "looking for a cushion..."
+      /need\s+(a|some)\s+\w+\s+for/i,             // "need a cushion for..."
+      /can\s+you\s+(suggest|recommend)/i,         // "can you suggest..."
+      /what\s+\w+\s+(do\s+you|would\s+you)\s+recommend/i, // "what do you recommend"
+      /options\s+for/i,                            // "options for back pain"
+      /alternatives?\s+(for|to)/i,                 // "alternatives for...", "alternative to..."
+    ];
+
+    // Check if query matches any recommendation pattern
+    for (const pattern of recommendationPatterns) {
+      if (pattern.test(lowerQuery)) {
+        return true;
+      }
+    }
+
+    // Additional keyword-based detection
+    const recommendationKeywords = [
+      'which is best',
+      'which one is best',
+      'which should i',
+      'which would you',
+      'best option',
+      'best choice',
+      'top pick',
+      'recommendation',
+      'suggestions',
+    ];
+
+    for (const keyword of recommendationKeywords) {
+      if (lowerQuery.includes(keyword)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -825,7 +1000,7 @@ Each query should be distinct and approach the information need differently.`,
     directResponse?: string;
   }> {
     const result = await this.expandQuery(query, { companyContext, productName, maxQueries: 3 });
-    
+
     return {
       expandedQuery: result.expandedQueries[0] || query,
       needsRAG: result.needsRAG,
