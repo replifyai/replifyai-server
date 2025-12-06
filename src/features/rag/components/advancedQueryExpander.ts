@@ -48,6 +48,9 @@ export class AdvancedQueryExpander {
   ): Promise<ExpandedQuery> {
     const { companyContext, productName, maxQueries = 5 } = options;
 
+    // Ensure product catalog is loaded
+    await productCatalog.refreshProducts();
+
     // Step 1: 🧠 SMART PRODUCT DETECTION using LLM
     // First, determine if this is a specific product query or a category/recommendation query
     // This prevents wrong product locking on queries like "which is the best back support cushion"

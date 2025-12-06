@@ -55,6 +55,9 @@ export class RAGService {
       };
     } catch (error: any) {
       console.error("Enhanced RAG query failed:", error);
+      if (error.message && error.message.includes("Having trouble connecting with server")) {
+        throw error;
+      }
       throw new Error(`Failed to process enhanced query: ${error.message}`);
     }
   }
@@ -101,14 +104,15 @@ export class RAGService {
     };
 
     // Build product-specific context
-    const productContext = productName 
+    const productContext = productName
       ? `\n- Specific Product: ${productName}\n- Focus: All query expansions should be specific to "${productName}" and its features, specifications, and use cases.`
       : '';
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: "system", content: `You are a query analyzer and expander for ${contextInfo.companyName}.
+        {
+          role: "system", content: `You are a query analyzer and expander for ${contextInfo.companyName}.
 
 Company Context:
 - Company: ${contextInfo.companyName}
@@ -149,16 +153,17 @@ Examples:
 - "how are you" → {"queryType": "casual", "needsRAG": false, "directResponse": "I'm doing great, thanks for asking! Ready to help you explore our solutions. What brings you here today?"}
 - "thank you" → {"queryType": "casual", "needsRAG": false, "directResponse": "You're very welcome! Let me know if you need anything else about our products or services."}
 - "what are the product features?" → {"queryType": "informational", "needsRAG": true, "expandedQuery": "product features specifications capabilities functionalities benefits key attributes ${contextInfo.productCategories} product details${productName ? ` ${productName} features ${productName} specifications ${productName} capabilities` : ''}"}
-- If company sells "orthopedic insoles" and query is "best for running"${productName ? ` for product "${productName}"` : ''} → {"queryType": "informational", "needsRAG": true, "expandedQuery": "running insoles athletic orthopedic support sports insoles arch support for runners plantar support performance footwear active lifestyle${productName ? ` ${productName} running ${productName} athletic ${productName} sports` : ''}"}` },
+- If company sells "orthopedic insoles" and query is "best for running"${productName ? ` for product "${productName}"` : ''} → {"queryType": "informational", "needsRAG": true, "expandedQuery": "running insoles athletic orthopedic support sports insoles arch support for runners plantar support performance footwear active lifestyle${productName ? ` ${productName} running ${productName} athletic ${productName} sports` : ''}"}`
+        },
         { role: "user", content: query },
       ],
       max_completion_tokens: 500,
       response_format: { type: "json_object" }
     });
-    
+
     const content = response.choices[0]?.message?.content || "{}";
     const analysis = JSON.parse(content);
-    
+
     return {
       expandedQuery: analysis.expandedQuery || query,
       needsRAG: analysis.needsRAG !== false,
@@ -183,7 +188,7 @@ Examples:
     try {
       // Analyze and expand the query with company context
       const queryAnalysis = await this.expandQuery(query, companyContext, productName);
-      
+
       // If RAG is not needed (greeting/casual), return direct response
       if (!queryAnalysis.needsRAG && queryAnalysis.directResponse) {
         return {
@@ -199,7 +204,7 @@ Examples:
           },
         };
       }
-      
+
       // Create embedding for the query
       const queryEmbedding = await createEmbedding(queryAnalysis.expandedQuery || query);
 
@@ -291,10 +296,10 @@ Examples:
 
       // Analyze response for missing context
       const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
-      
+
       // If no chunks were explicitly cited, include all retrieved chunks as sources
       // This ensures we always have sources even if the LLM doesn't follow citation format
-      const chunksToInclude = responseData.usedChunkIds.length > 0 
+      const chunksToInclude = responseData.usedChunkIds.length > 0
         ? contextChunks.filter(chunk => responseData.usedChunkIds.includes(chunk.id))
         : contextChunks;
 
@@ -400,7 +405,7 @@ Examples:
       /\[CHUNK_ID:\s*([^\]]+)\]/gi,
       /\[(?:USED_CHUNK|CHUNK_ID):\s*([^\]]+)\]/gi
     ];
-    
+
     chunkIdPatterns.forEach(pattern => {
       let match;
       while ((match = pattern.exec(responseText)) !== null) {
@@ -643,7 +648,7 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
 
     // Extract used chunk IDs
     const usedChunkIds = this.extractChunkIds(responseText);
-    
+
     // Clean up the response
     const cleanResponse = this.cleanChunkMarkers(responseText);
     return { response: cleanResponse, usedChunkIds };
@@ -658,7 +663,7 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
       /\[USED_CHUNK:\s*([^\]]+)\]/gi,
       /\[CHUNK_ID:\s*([^\]]+)\]/gi,
     ];
-    
+
     chunkIdPatterns.forEach(pattern => {
       let match;
       while ((match = pattern.exec(responseText)) !== null) {
@@ -671,7 +676,7 @@ IMPORTANT: When you use information from a chunk, include the chunk ID in your r
         });
       }
     });
-    
+
     return usedChunkIds;
   }
 

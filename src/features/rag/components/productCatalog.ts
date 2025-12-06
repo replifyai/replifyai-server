@@ -69,8 +69,7 @@ export class ProductCatalog {
         }
       } catch (error) {
         console.error('❌ Error fetching product list:', error);
-        // If we have no products and fetch fails, we might want to use a fallback or retry
-        // For now, we keep the existing state (empty or stale)
+        throw new Error("Having trouble connecting with server");
       } finally {
         this.fetchPromise = null;
       }

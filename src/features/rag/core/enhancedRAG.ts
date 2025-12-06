@@ -463,6 +463,12 @@ Return ONLY one word: "table" or "markdown".`;
 
     } catch (error: any) {
       console.error("❌ Enhanced RAG query failed:", error);
+
+      // Propagate specific connection errors
+      if (error.message && error.message.includes("Having trouble connecting with server")) {
+        throw error;
+      }
+
       throw new Error(`Failed to process query: ${error.message}`);
     }
   }
