@@ -773,12 +773,14 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
     QUERY: ${query}
 
     RESPONSE RULES (CRITICAL):
-    1. **BE CONCISE**: Maximum 60-80 words. Sales agents need quick, scannable answers.
-    2. **Product names in bold**: Use **Product Name** format.
-    3. **Key differentiator**: 1 line per product explaining WHY it fits the query.
-    4. **No repetition**: Don't repeat the same features for multiple products.
-    5. **No filler**: Skip phrases like "Additionally", "Furthermore", "It's worth noting".
-    6. Never mention "chunk", "document", "source", or "context".
+    1. Sales agents need quick, scannable answers.
+    2. **Key differentiator**: 1 line per product explaining WHY it fits the query.
+    3. **No repetition**: Don't repeat the same features for multiple products.
+    4. **No filler**: Skip phrases like "Additionally", "Furthermore", "It's worth noting".
+    5. Never mention "chunk", "document", "source", or "context".
+    6. Response should not be very big or very small. Depending on the query, adjust the response length.
+    7. Response should completely answer the query. Do not over explain the response.
+
 
     CITATION RULES (MANDATORY):
     - After EACH factual statement from context, add: [USED_CHUNK: chunk_id]
