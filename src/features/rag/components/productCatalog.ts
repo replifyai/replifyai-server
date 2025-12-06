@@ -2,7 +2,6 @@
  * Product Catalog Service
  * Maintains a list of all products and provides fuzzy matching capabilities
  */
-import axios from 'axios';
 
 export interface Product {
   id: string;
@@ -43,11 +42,22 @@ export class ProductCatalog {
     this.fetchPromise = (async () => {
       try {
         console.log('Fetching product list from API...');
-        const response = await axios.get('https://asia-south1-replify-9f49f.cloudfunctions.net/getProductList');
-        
-        if (Array.isArray(response.data)) {
+        const response = await fetch('https://asia-south1-replify-9f49f.cloudfunctions.net/getProductList', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (Array.isArray(data)) {
           // Map API response to internal Product interface
-          this.products = response.data.map((item: any) => ({
+          this.products = data.map((item: any) => ({
             id: item.id,
             name: item.name,
             aliases: item.alias || item.aliases || []
@@ -89,7 +99,7 @@ export class ProductCatalog {
   }> {
     // Ensure we have products (non-blocking attempt to refresh if stale)
     if (Date.now() - this.lastFetchTime > this.CACHE_DURATION && !this.fetchPromise) {
-        this.refreshProducts().catch(e => console.error("Background refresh failed", e));
+      this.refreshProducts().catch(e => console.error("Background refresh failed", e));
     }
 
     const normalizedQuery = this.normalizeText(query);
@@ -110,13 +120,13 @@ export class ProductCatalog {
       }
       // 2. Check Exact Substring (Query is part of Name OR Name is part of Query)
       else if (normalizedName.includes(normalizedQuery)) {
-         // User typed "Barefoot", matches "Barefoot Sock Shoe"
-         bestScore = 0.9;
-         bestMatchType = 'exact';
+        // User typed "Barefoot", matches "Barefoot Sock Shoe"
+        bestScore = 0.9;
+        bestMatchType = 'exact';
       } else if (normalizedQuery.includes(normalizedName)) {
-         // User typed "I want Barefoot Sock Shoe", matches "Barefoot Sock Shoe"
-         bestScore = 0.95;
-         bestMatchType = 'exact';
+        // User typed "I want Barefoot Sock Shoe", matches "Barefoot Sock Shoe"
+        bestScore = 0.95;
+        bestMatchType = 'exact';
       }
 
       // 3. Check Aliases
@@ -125,26 +135,26 @@ export class ProductCatalog {
         for (const alias of product.aliases) {
           const normalizedAlias = this.normalizeText(alias);
           if (!normalizedAlias) continue;
-          
+
           let currentAliasScore = 0;
 
           if (normalizedAlias === normalizedQuery) {
-             currentAliasScore = 0.95;
+            currentAliasScore = 0.95;
           } else if (normalizedAlias.includes(normalizedQuery)) {
-             // Query is substring of alias (User typing prefix)
-             currentAliasScore = 0.85;
+            // Query is substring of alias (User typing prefix)
+            currentAliasScore = 0.85;
           } else if (normalizedQuery.includes(normalizedAlias)) {
-             // Alias is substring of query (e.g. "Classic" in "Barefoot Sock Shoe Classic")
-             
-             // Skip stop words and very short aliases
-             if (stopWords.has(normalizedAlias)) continue;
-             if (normalizedAlias.length < 3) continue;
+            // Alias is substring of query (e.g. "Classic" in "Barefoot Sock Shoe Classic")
 
-             // Calculate score based on alias length (longer aliases = more specific = higher score)
-             // Base score 0.6. Boost up to 0.25 based on length.
-             // This ensures "Barefoot Sock Shoe Classic" (long) > "Classic" (short)
-             const lengthBoost = Math.min(0.25, (normalizedAlias.length / 50)); 
-             currentAliasScore = 0.6 + lengthBoost;
+            // Skip stop words and very short aliases
+            if (stopWords.has(normalizedAlias)) continue;
+            if (normalizedAlias.length < 3) continue;
+
+            // Calculate score based on alias length (longer aliases = more specific = higher score)
+            // Base score 0.6. Boost up to 0.25 based on length.
+            // This ensures "Barefoot Sock Shoe Classic" (long) > "Classic" (short)
+            const lengthBoost = Math.min(0.25, (normalizedAlias.length / 50));
+            currentAliasScore = 0.6 + lengthBoost;
           }
 
           if (currentAliasScore > bestScore) {
@@ -153,7 +163,7 @@ export class ProductCatalog {
           }
         }
       }
-      
+
       // Log detailed scoring for this product if it's a potential candidate
       if (bestScore >= threshold) {
         console.log(`🔍 Fuzzy Match Candidate: "${product.name}" (Score: ${bestScore.toFixed(2)}, Type: ${bestMatchType})`);
@@ -162,11 +172,11 @@ export class ProductCatalog {
       // 4. Fuzzy Matching (only if we haven't found a good match yet)
       // We use a higher threshold for triggering calculation to avoid expensive ops if we have a good match
       if (bestScore < 0.8) {
-         const fuzzyScore = this.calculateFuzzyScore(normalizedQuery, normalizedName, product.aliases);
-         if (fuzzyScore > bestScore) {
-            bestScore = fuzzyScore;
-            bestMatchType = 'fuzzy';
-         }
+        const fuzzyScore = this.calculateFuzzyScore(normalizedQuery, normalizedName, product.aliases);
+        if (fuzzyScore > bestScore) {
+          bestScore = fuzzyScore;
+          bestMatchType = 'fuzzy';
+        }
       }
 
       if (bestScore >= threshold) {
