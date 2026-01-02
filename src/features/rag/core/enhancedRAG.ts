@@ -212,12 +212,82 @@ Return ONLY one word: "table" or "markdown".`;
         console.log(`\n🔄 Multi-Product Comparison Mode`);
         console.log(`  - Products: ${expandedQuery.comparisonProducts.join(' vs ')}`);
 
-        allRetrievedChunks = await this.multiProductRetrieval(
-          expandedQuery.searchQueries,
-          expandedQuery.comparisonProducts,
-          retrievalCount,
-          similarityThreshold
+        // 🚀 DIRECT FETCH: For comparison queries, fetch ALL chunks for each product directly
+        // This avoids the grouping step which can fail due to product name matching issues
+        const comparisonChunksByProduct = await this.fetchAllChunksForProducts(
+          expandedQuery.comparisonProducts
         );
+
+        // Process comparison with pre-organized chunks
+        performance.retrieval = Date.now() - retrievalStart;
+
+        if (Object.values(comparisonChunksByProduct).every(chunks => chunks.length === 0)) {
+          const noResultsResponse = "I don't have enough information in the uploaded documents to answer this question. Please try uploading relevant documents first.";
+          const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
+
+          performance.total = Date.now() - startTime;
+          return {
+            query,
+            response: noResultsResponse,
+            responseFormat: 'text',
+            sources: [],
+            contextAnalysis: { ...contextAnalysis, isContextMissing: true },
+            performance,
+            metadata: {
+              expandedQuery,
+              retrievedChunks: 0,
+              rerankedChunks: 0,
+              finalChunks: 0,
+            },
+          };
+        }
+
+        // Skip standard flow and go directly to comparison generation
+        const genStart = Date.now();
+        let responseStyle: 'markdown' | 'table' | 'text' = formatAsMarkdown ? 'markdown' : 'text';
+        if (formatAsMarkdown) {
+          const detectedStyle = await this.analyzeResponseStyle(query);
+          if (detectedStyle === 'table') {
+            responseStyle = 'table';
+          }
+        }
+
+        const responseData = await this.generateDirectComparisonResponse(
+          expandedQuery.normalizedQuery,
+          comparisonChunksByProduct,
+          expandedQuery.comparisonProducts,
+          responseStyle
+        );
+
+        performance.generation = Date.now() - genStart;
+        performance.total = Date.now() - startTime;
+
+        const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
+
+        // Prepare sources from all products
+        const allChunks = Object.values(comparisonChunksByProduct).flat();
+        const sources = this.prepareSources(
+          allChunks.map((chunk, idx) => ({
+            id: `chunk_${idx}`,
+            content: chunk.content,
+            originalData: chunk,
+          }))
+        );
+
+        return {
+          query,
+          response: responseData.response,
+          responseFormat: formatAsMarkdown ? detectResponseFormat(responseData.response) : 'text',
+          sources,
+          contextAnalysis,
+          performance,
+          metadata: {
+            expandedQuery,
+            retrievedChunks: allChunks.length,
+            rerankedChunks: allChunks.length,
+            finalChunks: allChunks.length,
+          },
+        };
       } else if (expandedQuery.detectedProducts.length > 1) {
         // Multiple specific products detected (e.g., "Details of seating combos" -> 2 products)
         // Retrieve chunks for ALL detected products, not just the first one
@@ -471,6 +541,172 @@ Return ONLY one word: "table" or "markdown".`;
 
       throw new Error(`Failed to process query: ${error.message}`);
     }
+  }
+
+  /**
+   * 🚀 DIRECT FETCH: Fetch ALL available chunks for each product
+   * Used for comparison queries to avoid grouping/matching issues
+   */
+  private async fetchAllChunksForProducts(
+    products: string[]
+  ): Promise<Record<string, SearchResult[]>> {
+    const chunksByProduct: Record<string, SearchResult[]> = {};
+
+    for (const product of products) {
+      const trimmedProduct = product.trim();
+      console.log(`📥 Fetching ALL chunks for product: "${trimmedProduct}"`);
+
+      try {
+        // Use getChunksByProductName to fetch ALL chunks for this product
+        const chunks = await qdrantService.getChunksByProductName(trimmedProduct);
+        chunksByProduct[product] = chunks;
+        console.log(`   ✅ Found ${chunks.length} chunks for "${trimmedProduct}"`);
+      } catch (error) {
+        console.error(`   ❌ Error fetching chunks for "${trimmedProduct}":`, error);
+        chunksByProduct[product] = [];
+      }
+    }
+
+    return chunksByProduct;
+  }
+
+  /**
+   * 🚀 DIRECT COMPARISON: Generate comparison response with pre-organized chunks
+   * This bypasses the grouping step which can fail due to product name matching
+   */
+  private async generateDirectComparisonResponse(
+    query: string,
+    chunksByProduct: Record<string, SearchResult[]>,
+    products: string[],
+    responseStyle: 'markdown' | 'table' | 'text' = 'text'
+  ): Promise<{ response: string; usedChunkIds: string[] }> {
+    // Build context organized by product - chunks are already pre-grouped
+    const organizedContext = products.map(product => {
+      const productChunks = chunksByProduct[product] || [];
+      console.log(`📊 Building context for "${product}": ${productChunks.length} chunks`);
+
+      // Format each chunk with metadata
+      const formattedChunks = productChunks.map((chunk, idx) => {
+        let content = `[CHUNK_ID: ${product}_chunk_${idx}]\n${chunk.content}`;
+
+        // Include metadata if available
+        if (chunk.metadata) {
+          const toonMetadata = encodeMetadataToToon(chunk.metadata, chunk.filename);
+          if (toonMetadata) {
+            content += `\n\nMetadata:\n${toonMetadata}`;
+          }
+        }
+
+        return content;
+      });
+
+      return `
+=== ${product} (${productChunks.length} chunks) ===
+${formattedChunks.join('\n---\n')}
+`;
+    }).join('\n\n');
+
+    let responseFormat = '';
+
+    if (responseStyle === 'table') {
+      responseFormat = `COMPARISON FORMAT - TABLE:
+- Present the comparison as a **Markdown Table**.
+- Columns should be the Products being compared.
+- Rows should be the Features/Specifications/Aspects being compared.
+- Add a brief introductory sentence before the table and a brief summary after.
+- Ensure the table is clean and readable.`;
+    } else if (responseStyle === 'markdown') {
+      responseFormat = `COMPARISON FORMAT - MARKDOWN:
+- Use proper Markdown formatting
+- Start with "## Overview" describing both products briefly
+- **IMPORTANT: Wrap all product names in bold using **Product Name** format throughout the entire response**
+- Create clear comparison sections with headers:
+  ## Features Comparison
+  ## Specifications Comparison (MUST include weight, dimensions, price, materials)
+  ## Design & Comfort
+  ## Use Cases & Benefits
+- Add a blank line after EVERY header before content starts
+- Within each section, use bullet points with bold product names: "- **Product A**: ..." and "- **Product B**: ..."
+- Use "  - " (2 spaces + dash) for nested details
+- Add blank lines between sections
+- End with "## Summary" highlighting key differences and recommendations`;
+    } else {
+      responseFormat = `COMPARISON FORMAT - PLAIN TEXT:
+- Write in PLAIN TEXT only - NO markdown symbols (no ##, no **, no decorative characters)
+- Start with "Overview" describing both products briefly
+- Create clear comparison sections:
+  Overview
+  Features Comparison
+  Specifications Comparison (MUST include weight, dimensions, price, materials)
+  Design & Comfort
+  Use Cases & Benefits
+- Add a blank line after each section header
+- Within each section, use bullet points "- Product A: ..." and "- Product B: ..."
+- End with "Summary" highlighting key differences and recommendations`;
+    }
+
+    const systemPrompt = `You are an AI assistant helping users compare products.
+
+QUERY: ${query}
+
+PRODUCTS TO COMPARE: ${products.join(' vs ')}
+
+CRITICAL INSTRUCTIONS:
+1. Provide a DETAILED COMPARISON of the products
+2. Use ONLY the provided context - never use external knowledge
+3. **EXTRACT ALL SPECIFICATIONS FROM EACH PRODUCT'S CHUNKS**:
+   - Product Weight (look for "weight", "g", "gram", "kg")
+   - Dimensions/Size
+   - Price/MRP (look for "₹", "MRP", "price")
+   - Material/Composition
+   - Country of Origin
+   - Manufacturer details
+   - Available variants/sizes/colors
+4. Each product's information is clearly separated in the context below
+5. If a specification exists in ONE product but not the other, explicitly note this difference
+6. Only say "Not available in provided data" if you've searched all chunks for that product and truly cannot find the information
+7. Cite chunks using [USED_CHUNK: chunk_id] after each statement
+
+${responseFormat}
+
+CONTEXT - ORGANIZED BY PRODUCT:
+${organizedContext}`;
+
+    const responseText = await inferenceProvider.chatCompletion(
+      systemPrompt,
+      query,
+      { temperature: 0.1, maxTokens: 2000 }
+    );
+
+    // Extract used chunk IDs
+    const usedChunkIds: string[] = [];
+    const chunkIdPatterns = [
+      /\[USED_CHUNK:\s*([^\]]+)\]/gi,
+      /\[CHUNK_ID:\s*([^\]]+)\]/gi,
+    ];
+
+    chunkIdPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(responseText)) !== null) {
+        const chunkIdString = match[1];
+        const individualIds = chunkIdString.split(',').map(id => id.trim());
+        individualIds.forEach(id => {
+          if (id && !usedChunkIds.includes(id)) {
+            usedChunkIds.push(id);
+          }
+        });
+      }
+    });
+
+    // Clean response
+    const cleanResponse = responseText
+      .replace(/\[(?:USED_CHUNK|CHUNK_ID):\s*[^\]]+\]/gi, '')
+      .replace(/\\n/g, '\n')
+      .replace(/ +/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return { response: cleanResponse, usedChunkIds };
   }
 
   /**
@@ -846,17 +1082,71 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
     products: string[],
     responseStyle: 'markdown' | 'table' | 'text' = 'text'
   ): Promise<{ response: string; usedChunkIds: string[] }> {
-    // Group chunks by product
+    // Group chunks by product using fuzzy/case-insensitive matching
     const chunksByProduct: Record<string, typeof contextChunks> = {};
     products.forEach(product => {
       chunksByProduct[product] = [];
     });
 
-    for (const chunk of contextChunks) {
-      const productName = chunk.originalData.metadata?.productName;
-      if (productName && products.includes(productName)) {
-        chunksByProduct[productName].push(chunk);
+    // Helper function to find matching product using case-insensitive comparison
+    const findMatchingProduct = (chunkProductName: string | undefined, chunkFilename: string | undefined): string | null => {
+      if (!chunkProductName && !chunkFilename) return null;
+      
+      // Normalize strings for comparison
+      const normalize = (str: string) => str.toLowerCase().trim().replace(/\s+/g, ' ');
+      
+      // Try to match against product names
+      for (const product of products) {
+        const normalizedProduct = normalize(product);
+        
+        // Check metadata productName (case-insensitive)
+        if (chunkProductName && normalize(chunkProductName) === normalizedProduct) {
+          return product;
+        }
+        
+        // Check if product name is contained in metadata (for partial matches)
+        if (chunkProductName && normalize(chunkProductName).includes(normalizedProduct)) {
+          return product;
+        }
+        if (chunkProductName && normalizedProduct.includes(normalize(chunkProductName))) {
+          return product;
+        }
+        
+        // Fallback: check filename
+        if (chunkFilename && normalize(chunkFilename).includes(normalizedProduct)) {
+          return product;
+        }
+        if (chunkFilename && normalizedProduct.includes(normalize(chunkFilename).replace(/\.[^.]+$/, ''))) {
+          return product;
+        }
       }
+      
+      return null;
+    };
+
+    // Track unassigned chunks for debugging
+    const unassignedChunks: typeof contextChunks = [];
+
+    for (const chunk of contextChunks) {
+      const chunkProductName = chunk.originalData.metadata?.productName;
+      const chunkFilename = chunk.originalData.filename;
+      
+      const matchedProduct = findMatchingProduct(chunkProductName, chunkFilename);
+      
+      if (matchedProduct) {
+        chunksByProduct[matchedProduct].push(chunk);
+      } else {
+        unassignedChunks.push(chunk);
+        console.warn(`⚠️ Comparison: Could not match chunk to any product. Metadata productName: "${chunkProductName}", Filename: "${chunkFilename}"`);
+      }
+    }
+
+    // Log chunk distribution for debugging
+    for (const product of products) {
+      console.log(`📊 Comparison chunks for "${product}": ${chunksByProduct[product].length}`);
+    }
+    if (unassignedChunks.length > 0) {
+      console.warn(`⚠️ ${unassignedChunks.length} chunks could not be assigned to any product`);
     }
 
     // Build context organized by product
@@ -920,8 +1210,19 @@ CRITICAL INSTRUCTIONS:
 2. Use ONLY the provided context - never use external knowledge
 3. Organize your response with clear sections for each comparison aspect
 4. Be objective and factual - highlight both similarities and differences
-5. If information is missing for a product, explicitly state that
-6. Cite chunks using [USED_CHUNK: chunk_id] after each statement
+5. **EXTRACT ALL SPECIFICATIONS**: Look carefully in the context for:
+   - Product Weight (often in grams or kg)
+   - Dimensions/Size
+   - Price/MRP
+   - Material/Composition
+   - Country of Origin
+   - Manufacturer details
+   - Available variants/sizes/colors
+   These may appear in different formats (JSON, bullet points, or prose) - extract them ALL.
+6. If a specification is truly NOT present anywhere in the context for a product, state "Not found in provided context"
+7. Cite chunks using [USED_CHUNK: chunk_id] after each statement
+
+IMPORTANT: Scan the ENTIRE context carefully. Specifications like weight may appear in metadata sections labeled "Toon" or in structured data formats. Do NOT say "Not specified" unless you've confirmed the information is truly absent.
 
 ${responseFormat}
 

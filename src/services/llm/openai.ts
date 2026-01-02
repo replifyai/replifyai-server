@@ -20,6 +20,79 @@ export async function createEmbedding(text: string): Promise<number[]> {
   }
 }
 
+/**
+ * Creates batch embeddings using OpenAI's text-embedding-ada-002 model
+ * @param texts Array of texts to embed
+ * @returns Promise<number[][]> Array of embedding vectors
+ */
+export async function createBatchEmbeddings(texts: string[]): Promise<number[][]> {
+  if (!texts || texts.length === 0) {
+    return [];
+  }
+
+  try {
+    const response = await openai.embeddings.create({
+      model: "text-embedding-ada-002",
+      input: texts,
+    });
+
+    return response.data.map(item => item.embedding);
+  } catch (error) {
+    throw new Error(`Failed to create batch embeddings: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Creates an embedding using OpenAI's text-embedding-3-large model
+ * This model provides higher quality embeddings with 3072 dimensions
+ * @param text The text to embed
+ * @param dimensions Optional dimensions (default: 3072, can be reduced to 256, 1024, or 3072)
+ * @returns Promise<number[]> The embedding vector
+ */
+export async function createEmbeddingLarge(
+  text: string,
+  dimensions?: number
+): Promise<number[]> {
+  try {
+    const response = await openai.embeddings.create({
+      model: "text-embedding-3-large",
+      input: text,
+      dimensions: dimensions, // Optional: 256, 1024, or 3072 (default: 3072)
+    });
+
+    return response.data[0].embedding;
+  } catch (error) {
+    throw new Error(`Failed to create embedding with text-embedding-3-large: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Creates batch embeddings using OpenAI's text-embedding-3-large model
+ * @param texts Array of texts to embed
+ * @param dimensions Optional dimensions (default: 3072, can be reduced to 256, 1024, or 3072)
+ * @returns Promise<number[][]> Array of embedding vectors
+ */
+export async function createBatchEmbeddingsLarge(
+  texts: string[],
+  dimensions?: number
+): Promise<number[][]> {
+  if (!texts || texts.length === 0) {
+    return [];
+  }
+
+  try {
+    const response = await openai.embeddings.create({
+      model: "text-embedding-3-large",
+      input: texts,
+      dimensions: dimensions, // Optional: 256, 1024, or 3072 (default: 3072)
+    });
+
+    return response.data.map(item => item.embedding);
+  } catch (error) {
+    throw new Error(`Failed to create batch embeddings with text-embedding-3-large: ${(error as Error).message}`);
+  }
+}
+
 export async function generateChatResponse(prompt: string, context: string[]): Promise<string> {
   try {
     const systemPrompt = `You are a helpful AI assistant that answers questions based ONLY on the provided context from uploaded documents. 

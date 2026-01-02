@@ -158,6 +158,15 @@ Instructions:
 3. Keep supporting context that helps understand the main information
 4. Remove only clearly irrelevant information
 5. Preserve factual accuracy and key details
+6. **CRITICAL**: ALWAYS preserve product specifications like:
+   - Weight (g, kg, oz, lb)
+   - Dimensions (cm, inches, mm)
+   - Price/MRP/Cost
+   - Material composition
+   - Country of origin
+   - Manufacturer details
+   - Model numbers/SKUs
+   These specifications are often essential for product comparisons and must NEVER be removed.
 
 Return JSON:
 {
@@ -246,6 +255,24 @@ Return JSON:
     // Bonus for sentence length (prefer informative sentences)
     if (sentence.length > 50 && sentence.length < 300) {
       score += 0.5;
+    }
+
+    // HIGH PRIORITY: Boost sentences containing product specifications
+    // These are critical for product comparisons and should never be dropped
+    const specificationTerms = [
+      'weight', 'gram', 'kg', 'oz', 'lb',
+      'dimension', 'size', 'cm', 'inch', 'mm',
+      'price', 'mrp', 'cost', '₹', '$', 'rs',
+      'material', 'made of', 'composition', 'fabric',
+      'country', 'origin', 'manufactured', 'manufacturer',
+      'model', 'sku', 'variant', 'color', 'colour'
+    ];
+    
+    for (const term of specificationTerms) {
+      if (lowerSentence.includes(term)) {
+        score += 2; // High boost for specification sentences
+        break; // Only count once
+      }
     }
 
     return score;

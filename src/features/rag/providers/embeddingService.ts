@@ -6,7 +6,7 @@ import { env } from "../../../env.js";
  * 
  * This service provides a unified interface for creating embeddings using different providers.
  * Currently supports:
- * - OpenAI: text-embedding-ada-002 (default)
+ * - OpenAI: text-embedding-ada-002 (default) or text-embedding-3-large
  * - Nebius: Qwen/Qwen3-Embedding-8B
  * 
  * Usage:
@@ -16,6 +16,9 @@ import { env } from "../../../env.js";
  * 
  * The service automatically uses the provider specified in EMBEDDING_PROVIDER,
  * or defaults to OpenAI if not set.
+ * 
+ * For text-embedding-3-large, you can optionally specify dimensions (256, 1024, or 3072):
+ *   createEmbedding(text, { model: 'text-embedding-3-large', dimensions: 1024 })
  */
 
 // OpenAI client for embeddings
@@ -36,6 +39,7 @@ export type EmbeddingProvider = 'openai' | 'nebius';
 export interface EmbeddingOptions {
   provider?: EmbeddingProvider;
   model?: string;
+  dimensions?: number; // For text-embedding-3-large: 256, 1024, or 3072 (default: 3072)
 }
 
 /**
@@ -56,7 +60,7 @@ export async function createEmbedding(
         return await createNebiusEmbedding(text, options.model);
       case 'openai':
       default:
-        return await createOpenAIEmbedding(text, options.model);
+        return await createOpenAIEmbedding(text, options.model, options.dimensions);
     }
   } catch (error) {
     throw new Error(`Failed to create embedding with ${provider}: ${(error as Error).message}`);
@@ -64,13 +68,22 @@ export async function createEmbedding(
 }
 
 /**
- * Creates an embedding using OpenAI's text-embedding-ada-002 model
+ * Creates an embedding using OpenAI models
+ * Supports text-embedding-ada-002 (default) and text-embedding-3-large
  */
-async function createOpenAIEmbedding(text: string, model?: string): Promise<number[]> {
-  const response = await openai.embeddings.create({
-    model: model || "text-embedding-ada-002",
+async function createOpenAIEmbedding(text: string, model?: string, dimensions?: number): Promise<number[]> {
+  const embeddingModel = model || "text-embedding-ada-002";
+  const embeddingConfig: any = {
+    model: embeddingModel,
     input: text,
-  });
+  };
+
+  // Add dimensions parameter for text-embedding-3-large model
+  if (embeddingModel === "text-embedding-3-large" && dimensions !== undefined) {
+    embeddingConfig.dimensions = dimensions;
+  }
+
+  const response = await openai.embeddings.create(embeddingConfig);
 
   return response.data[0].embedding;
 }
@@ -113,7 +126,7 @@ export async function createBatchEmbeddings(
         break;
       case 'openai':
       default:
-        embeddings = await createBatchOpenAIEmbeddings(texts, options.model);
+        embeddings = await createBatchOpenAIEmbeddings(texts, options.model, options.dimensions);
         break;
     }
     console.log(`✅ Successfully created ${embeddings.length} embeddings.`);
@@ -125,13 +138,22 @@ export async function createBatchEmbeddings(
 }
 
 /**
- * Creates batch embeddings using OpenAI
+ * Creates batch embeddings using OpenAI models
+ * Supports text-embedding-ada-002 (default) and text-embedding-3-large
  */
-async function createBatchOpenAIEmbeddings(texts: string[], model?: string): Promise<number[][]> {
-  const response = await openai.embeddings.create({
-    model: model || "text-embedding-ada-002",
+async function createBatchOpenAIEmbeddings(texts: string[], model?: string, dimensions?: number): Promise<number[][]> {
+  const embeddingModel = model || "text-embedding-ada-002";
+  const embeddingConfig: any = {
+    model: embeddingModel,
     input: texts,
-  });
+  };
+
+  // Add dimensions parameter for text-embedding-3-large model
+  if (embeddingModel === "text-embedding-3-large" && dimensions !== undefined) {
+    embeddingConfig.dimensions = dimensions;
+  }
+
+  const response = await openai.embeddings.create(embeddingConfig);
 
   return response.data.map(item => item.embedding);
 }

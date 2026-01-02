@@ -163,9 +163,10 @@ export class Reranker {
    - 0.7-0.9: Mostly complete with minor gaps
    - 0.4-0.6: Partial information
    - 0-0.3: Minimal information
+   **IMPORTANT**: Chunks containing product specifications (weight, dimensions, price, material, origin, manufacturer) should score HIGHER on completeness as these are essential details.
 
 3. **Specificity** (0-1): How specific is the information to the query?
-   - 1.0: Very specific and detailed
+   - 1.0: Very specific and detailed (includes exact specifications like weight in grams, exact dimensions)
    - 0.7-0.9: Reasonably specific
    - 0.4-0.6: General information
    - 0-0.3: Very generic
@@ -244,6 +245,11 @@ Return JSON:
     const lowerQuery = query.toLowerCase();
     const queryTokens = lowerQuery.split(/\s+/);
 
+    // Check if this is likely a comparison or specification query
+    const isComparisonQuery = ['compare', 'difference', 'vs', 'versus', 'between', 'differentiate'].some(
+      term => lowerQuery.includes(term)
+    );
+
     const scored = results.map(result => {
       const content = result.content.toLowerCase();
       
@@ -268,8 +274,19 @@ Return JSON:
       // Heuristic 3: Exact phrase bonus
       const exactPhraseBonus = content.includes(lowerQuery) ? 0.15 : 0;
 
+      // Heuristic 4: Specification data bonus - boost chunks with product specs
+      // This is especially important for comparison queries
+      let specificationBonus = 0;
+      const specTerms = ['weight', 'gram', ' g ', ' kg ', 'dimension', 'price', 'mrp', '₹', 'material', 'origin', 'manufacturer'];
+      for (const term of specTerms) {
+        if (content.includes(term)) {
+          specificationBonus = isComparisonQuery ? 0.1 : 0.05;
+          break;
+        }
+      }
+
       const finalScore = Math.min(
-        result.score + keywordBonus + positionBonus + exactPhraseBonus,
+        result.score + keywordBonus + positionBonus + exactPhraseBonus + specificationBonus,
         1.0
       );
 
