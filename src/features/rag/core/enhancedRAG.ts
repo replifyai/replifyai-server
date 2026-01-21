@@ -83,6 +83,7 @@ export class EnhancedRAGService {
     /don't have enough information/i,
     /not provided in.*context/i,
     /information.*not available/i,
+    /no.*information.*available/i,
     /cannot find.*in.*documents/i,
     /no relevant information/i,
     /context doesn't contain/i,
@@ -98,6 +99,9 @@ export class EnhancedRAGService {
     /context.*does not include/i,
     /provided context.*does not/i,
     /provided documents.*do not contain/i,
+    /no information.*about/i,
+    /not mentioned/i,
+    /not find any information/i,
   ];
 
   /**
@@ -212,10 +216,11 @@ Return ONLY one word: "table" or "markdown".`;
         console.log(`\n🔄 Multi-Product Comparison Mode`);
         console.log(`  - Products: ${expandedQuery.comparisonProducts.join(' vs ')}`);
 
-        // 🚀 DIRECT FETCH: For comparison queries, fetch ALL chunks for each product directly
-        // This avoids the grouping step which can fail due to product name matching issues
+        // 🚀 OPTIMIZATION: Use scoped semantic search + reranking for comparison
+        // This avoids fetching ALL chunks which causes context overflow
         const comparisonChunksByProduct = await this.fetchAllChunksForProducts(
-          expandedQuery.comparisonProducts
+          expandedQuery.comparisonProducts,
+          expandedQuery.normalizedQuery
         );
 
         // Process comparison with pre-organized chunks
@@ -223,7 +228,7 @@ Return ONLY one word: "table" or "markdown".`;
 
         if (Object.values(comparisonChunksByProduct).every(chunks => chunks.length === 0)) {
           const noResultsResponse = "I don't have enough information in the uploaded documents to answer this question. Please try uploading relevant documents first.";
-          const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
+          const contextAnalysis = await this.analyzeForMissingContext(query, noResultsResponse);
 
           performance.total = Date.now() - startTime;
           return {
@@ -262,7 +267,7 @@ Return ONLY one word: "table" or "markdown".`;
         performance.generation = Date.now() - genStart;
         performance.total = Date.now() - startTime;
 
-        const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
+        const contextAnalysis = await this.analyzeForMissingContext(query, responseData.response);
 
         // Prepare sources from all products
         const allChunks = Object.values(comparisonChunksByProduct).flat();
@@ -314,7 +319,7 @@ Return ONLY one word: "table" or "markdown".`;
 
       if (allRetrievedChunks.length === 0) {
         const noResultsResponse = "I don't have enough information in the uploaded documents to answer this question. Please try uploading relevant documents first.";
-        const contextAnalysis = this.analyzeForMissingContext(query, noResultsResponse);
+        const contextAnalysis = await this.analyzeForMissingContext(query, noResultsResponse);
 
         performance.total = Date.now() - startTime;
         return {
@@ -507,7 +512,7 @@ Return ONLY one word: "table" or "markdown".`;
       performance.total = Date.now() - startTime;
 
       // ==================== Step 8: Analyze Response ====================
-      const contextAnalysis = this.analyzeForMissingContext(query, responseData.response);
+      const contextAnalysis = await this.analyzeForMissingContext(query, responseData.response);
 
       // Prepare sources
       const usedChunks = responseData.usedChunkIds.length > 0
@@ -544,23 +549,49 @@ Return ONLY one word: "table" or "markdown".`;
   }
 
   /**
-   * 🚀 DIRECT FETCH: Fetch ALL available chunks for each product
-   * Used for comparison queries to avoid grouping/matching issues
+   * 🚀 DIRECT FETCH: Fetch RELEVANT chunks for each product using semantic search + reranking
+   * Used for comparison queries to avoid context overflow while maintaining relevance
    */
   private async fetchAllChunksForProducts(
-    products: string[]
+    products: string[],
+    query: string
   ): Promise<Record<string, SearchResult[]>> {
     const chunksByProduct: Record<string, SearchResult[]> = {};
 
+    // Create embedding for semantic search
+    const queryEmbedding = await createEmbedding(query);
+
     for (const product of products) {
       const trimmedProduct = product.trim();
-      console.log(`📥 Fetching ALL chunks for product: "${trimmedProduct}"`);
+      console.log(`📥 Fetching RELEVANT chunks for product: "${trimmedProduct}"`);
 
       try {
-        // Use getChunksByProductName to fetch ALL chunks for this product
-        const chunks = await qdrantService.getChunksByProductName(trimmedProduct);
-        chunksByProduct[product] = chunks;
-        console.log(`   ✅ Found ${chunks.length} chunks for "${trimmedProduct}"`);
+        // 1. Semantic search scoped to product (get top 50 candidates)
+        const candidates = await qdrantService.searchSimilar(
+          queryEmbedding,
+          50,
+          0.3, // Lower threshold for broad capture
+          trimmedProduct
+        );
+
+        // 2. Rerank candidates to find most relevant ones
+        const rankedChunks = reranker.fastRerank(
+          candidates,
+          query,
+          10 // Keep top 10 chunks per product for comparison (total ~20-30 for 2-3 products)
+        );
+
+        // Map back to SearchResult format
+        chunksByProduct[product] = rankedChunks.map(c => ({
+          chunkId: c.chunkId,
+          documentId: c.documentId,
+          content: c.content,
+          filename: c.filename,
+          score: c.finalScore,
+          metadata: c.metadata,
+        }));
+
+        console.log(`   ✅ Found ${candidates.length} candidates, keeping top ${rankedChunks.length} for "${trimmedProduct}"`);
       } catch (error) {
         console.error(`   ❌ Error fetching chunks for "${trimmedProduct}":`, error);
         chunksByProduct[product] = [];
@@ -1091,19 +1122,19 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
     // Helper function to find matching product using case-insensitive comparison
     const findMatchingProduct = (chunkProductName: string | undefined, chunkFilename: string | undefined): string | null => {
       if (!chunkProductName && !chunkFilename) return null;
-      
+
       // Normalize strings for comparison
       const normalize = (str: string) => str.toLowerCase().trim().replace(/\s+/g, ' ');
-      
+
       // Try to match against product names
       for (const product of products) {
         const normalizedProduct = normalize(product);
-        
+
         // Check metadata productName (case-insensitive)
         if (chunkProductName && normalize(chunkProductName) === normalizedProduct) {
           return product;
         }
-        
+
         // Check if product name is contained in metadata (for partial matches)
         if (chunkProductName && normalize(chunkProductName).includes(normalizedProduct)) {
           return product;
@@ -1111,7 +1142,7 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
         if (chunkProductName && normalizedProduct.includes(normalize(chunkProductName))) {
           return product;
         }
-        
+
         // Fallback: check filename
         if (chunkFilename && normalize(chunkFilename).includes(normalizedProduct)) {
           return product;
@@ -1120,7 +1151,7 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
           return product;
         }
       }
-      
+
       return null;
     };
 
@@ -1130,9 +1161,9 @@ Keep the response well-structured, easy to scan, and naturally formatted using s
     for (const chunk of contextChunks) {
       const chunkProductName = chunk.originalData.metadata?.productName;
       const chunkFilename = chunk.originalData.filename;
-      
+
       const matchedProduct = findMatchingProduct(chunkProductName, chunkFilename);
-      
+
       if (matchedProduct) {
         chunksByProduct[matchedProduct].push(chunk);
       } else {
@@ -1456,18 +1487,31 @@ IMPORTANT: Cite chunks using [USED_CHUNK: chunk_id]`;
   }
 
   /**
-   * Analyze if response indicates missing context
+   * 🚀 ENHANCED: Analyze if response indicates missing context using LLM
+   * More robust and scalable than regex pattern matching
    */
-  private analyzeForMissingContext(query: string, response: string): {
+  private async analyzeForMissingContext(query: string, response: string): Promise<{
     isContextMissing: boolean;
     suggestedTopics: string[];
     category: string;
     priority: 'low' | 'medium' | 'high';
-  } {
+  }> {
+    // FAST PATH: Quick pattern check for obvious cases
     const detectedPatterns = this.MISSING_CONTEXT_PATTERNS.filter(pattern => pattern.test(response));
-    const isContextMissing = detectedPatterns.length > 0;
 
-    if (!isContextMissing) {
+    // If even ONE pattern matches, it's highly likely context is missing
+    if (detectedPatterns.length >= 1) {
+      const analysis = this.analyzeQuery(query);
+      return {
+        isContextMissing: true,
+        suggestedTopics: analysis.suggestedTopics,
+        category: analysis.category,
+        priority: analysis.priority,
+      };
+    }
+
+    // If no patterns at all and response is substantial, likely answered
+    if (detectedPatterns.length === 0 && response.length > 100) {
       return {
         isContextMissing: false,
         suggestedTopics: [],
@@ -1476,14 +1520,70 @@ IMPORTANT: Cite chunks using [USED_CHUNK: chunk_id]`;
       };
     }
 
-    // Simple analysis
-    const analysis = this.analyzeQuery(query);
-    return {
-      isContextMissing: true,
-      suggestedTopics: analysis.suggestedTopics,
-      category: analysis.category,
-      priority: analysis.priority,
-    };
+    // ROBUST PATH: Use LLM for edge cases (1 pattern match or short responses)
+    try {
+      const llmResult = await inferenceProvider.chatCompletion(
+        `You are a response quality analyzer. Analyze if the AI response adequately answered the user's question.
+
+USER QUESTION: "${query}"
+
+AI RESPONSE:
+${response.substring(0, 800)}
+
+═══════════════════════════════════════════════════════════════
+ANALYZE AND RETURN JSON:
+{
+  "isContextMissing": true/false,
+  "reason": "Brief explanation",
+  "confidence": 0.0-1.0
+}
+
+CRITERIA FOR isContextMissing = TRUE:
+- Response says it cannot find/access information
+- Response explicitly states lack of context or data
+- Response asks user to provide more info because it lacks knowledge
+- Response gives generic advice instead of specific product info
+
+CRITERIA FOR isContextMissing = FALSE:
+- Response provides specific product details, prices, features
+- Response answers with concrete information from knowledge base
+- Response makes clear recommendations with product names
+- Response provides actionable information
+
+Be strict: If the response provides SOME useful info, isContextMissing = FALSE`,
+        'Analyze response quality',
+        { temperature: 0, maxTokens: 150 }
+      );
+
+      const result = JSON.parse(llmResult);
+
+      if (result.isContextMissing === true) {
+        const analysis = this.analyzeQuery(query);
+        return {
+          isContextMissing: true,
+          suggestedTopics: analysis.suggestedTopics,
+          category: analysis.category,
+          priority: analysis.priority,
+        };
+      }
+
+      return {
+        isContextMissing: false,
+        suggestedTopics: [],
+        category: 'answered',
+        priority: 'low',
+      };
+
+    } catch (error) {
+      console.warn('LLM context analysis failed, using pattern fallback:', error);
+      // Fallback to pattern-based detection
+      return {
+        isContextMissing: detectedPatterns.length > 0,
+        suggestedTopics: [],
+        category: detectedPatterns.length > 0 ? 'unanswered' : 'answered',
+        priority: 'low',
+      };
+    }
   }
 
   /**

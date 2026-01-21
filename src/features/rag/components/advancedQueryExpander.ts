@@ -40,7 +40,143 @@ export interface QueryExpansionOptions {
 export class AdvancedQueryExpander {
 
   /**
+   * 🚀 OPTIMIZED: Comprehensive query analysis in ONE LLM call
+   * Replaces 4 separate LLM calls: smartProductDetection, isProductCatalogQuery, isComparisonQuery, classifyQuery
+   * This dramatically reduces latency by consolidating analysis into a single request.
+   */
+  private async analyzeQueryComprehensive(
+    query: string,
+    productHint?: string,
+    companyContext?: QueryExpansionOptions['companyContext']
+  ): Promise<{
+    // Query classification
+    queryType: ExpandedQuery['queryType'];
+    needsRAG: boolean;
+    directResponse?: string;
+    intent: string;
+    // Product detection
+    isSpecificProductQuery: boolean;
+    detectedProducts: string[];
+    productDetectionReason: string;
+    // Query type flags
+    isComparisonQuery: boolean;
+    isCatalogQuery: boolean;
+  }> {
+    const contextInfo = {
+      companyName: companyContext?.companyName || env.COMPANY_NAME,
+      companyDescription: companyContext?.companyDescription || env.COMPANY_DESCRIPTION,
+      productCategories: companyContext?.productCategories || env.PRODUCT_CATEGORIES,
+    };
+
+    // Get product catalog for reference
+    const allProducts = productCatalog.getAllProductNames();
+    const productList = allProducts.slice(0, 80).join(', '); // Limit to prevent token overflow
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o', // Use gpt-4o for comprehensive analysis
+        messages: [
+          {
+            role: 'system',
+            content: `You are an expert query analyzer for ${contextInfo.companyName}.
+
+ANALYZE the user query and return a comprehensive JSON response. This SINGLE analysis replaces multiple separate calls, so be thorough.
+
+═══════════════════════════════════════════════════════════════
+AVAILABLE PRODUCTS (for reference):
+${productList}
+${productHint ? `\nUser also mentioned: "${productHint}"` : ''}
+═══════════════════════════════════════════════════════════════
+
+ANALYSIS REQUIRED:
+
+1. **QUERY CLASSIFICATION**:
+   - queryType: "greeting" | "casual" | "informational" | "comparison" | "specification" | "catalog"
+   - needsRAG: true/false (greetings/casual → false, others → true)
+   - directResponse: If needsRAG is false, provide a friendly response
+   - intent: Brief description of user intent
+
+2. **PRODUCT DETECTION**:
+   - isSpecificProductQuery: Is user asking about SPECIFIC named products?
+     - TRUE: "Price of Mattress Topper", "Features of Frido Ultimate Pillow"
+     - FALSE: "Which is the best cushion for car?", "Recommend something for back pain"
+   - detectedProducts: Array of EXACT product names from the list above ([] if category query)
+   - productDetectionReason: Brief explanation
+
+3. **QUERY TYPE FLAGS**:
+   - isComparisonQuery: Does query compare 2+ products? ("A vs B", "difference between", "which is better")
+   - isCatalogQuery: Is user asking for product overview/catalog? ("what products available", "show me your products")
+
+═══════════════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════════════
+1. "best", "recommend", "suggest", "which is best for" → isSpecificProductQuery: FALSE, detectedProducts: []
+2. Only return products that EXACTLY match names from the product list
+3. Generic words like "cushion", "insole", "pillow" alone are NOT product names
+4. For comparison queries, detect ALL products being compared
+5. Be very accurate - wrong product detection causes bad user experience
+
+RETURN JSON:
+{
+  "queryType": "...",
+  "needsRAG": true/false,
+  "directResponse": "..." or null,
+  "intent": "...",
+  "isSpecificProductQuery": true/false,
+  "detectedProducts": [...],
+  "productDetectionReason": "...",
+  "isComparisonQuery": true/false,
+  "isCatalogQuery": true/false
+}`
+          },
+          { role: 'user', content: query }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 500,
+        response_format: { type: "json_object" }
+      });
+
+      const content = response.choices[0]?.message?.content || '{}';
+      const result = JSON.parse(content);
+
+      // Log analysis results
+      console.log(`🧠 Comprehensive Query Analysis:`);
+      console.log(`   ├─ Type: ${result.queryType} | RAG: ${result.needsRAG}`);
+      console.log(`   ├─ Specific Product: ${result.isSpecificProductQuery} | Products: [${(result.detectedProducts || []).join(', ')}]`);
+      console.log(`   ├─ Comparison: ${result.isComparisonQuery} | Catalog: ${result.isCatalogQuery}`);
+      console.log(`   └─ Reason: ${result.productDetectionReason}`);
+
+      return {
+        queryType: result.queryType || 'unknown',
+        needsRAG: result.needsRAG !== false,
+        directResponse: result.directResponse || undefined,
+        intent: result.intent || 'General query',
+        isSpecificProductQuery: result.isSpecificProductQuery === true,
+        detectedProducts: Array.isArray(result.detectedProducts) ? result.detectedProducts : [],
+        productDetectionReason: result.productDetectionReason || 'No reason provided',
+        isComparisonQuery: result.isComparisonQuery === true,
+        isCatalogQuery: result.isCatalogQuery === true,
+      };
+
+    } catch (error) {
+      console.error('❌ Comprehensive query analysis failed:', error);
+      // Return safe defaults on error
+      return {
+        queryType: 'informational',
+        needsRAG: true,
+        intent: 'General query (analysis failed)',
+        isSpecificProductQuery: false,
+        detectedProducts: [],
+        productDetectionReason: 'Analysis failed - defaulting to broad search',
+        isComparisonQuery: false,
+        isCatalogQuery: false,
+      };
+    }
+  }
+
+  /**
    * Main expansion function - orchestrates all expansion techniques
+   * 🚀 OPTIMIZED: Uses single comprehensive LLM call instead of 4 separate calls
    */
   async expandQuery(
     query: string,
@@ -51,54 +187,38 @@ export class AdvancedQueryExpander {
     // Ensure product catalog is loaded
     await productCatalog.refreshProducts();
 
-    // Step 1: 🧠 SMART PRODUCT DETECTION using LLM
-    // First, determine if this is a specific product query or a category/recommendation query
-    // This prevents wrong product locking on queries like "which is the best back support cushion"
-    let detectedProducts: string[] = [];
+    // 🚀 OPTIMIZED: Single comprehensive analysis call replaces 4 sequential LLM calls
+    // Before: smartProductDetection → isProductCatalogQuery/isComparisonQuery → classifyQuery
+    // After: One call that returns all analysis in ~0.5-1s instead of ~2-4s
+    const analysis = await this.analyzeQueryComprehensive(query, productName, companyContext);
 
-    const smartDetection = await this.smartProductDetection(query, productName);
-
-    if (smartDetection.isSpecificProductQuery && smartDetection.detectedProducts.length > 0) {
-      // User is asking about specific product(s) - use LLM-detected products
-      detectedProducts = smartDetection.detectedProducts;
-      console.log(`🎯 Specific product query detected - Products: ${detectedProducts.join(', ')}`);
-    } else if (!smartDetection.isSpecificProductQuery) {
-      // User is asking for recommendations/category - don't lock to any product
-      console.log(`🔓 Category/recommendation query - No product lock`);
-      console.log(`   Reason: ${smartDetection.reason}`);
-    } else {
-      // Fallback to fuzzy matching if LLM couldn't determine
-      console.log(`⚠️ Smart detection inconclusive, falling back to fuzzy matching`);
-      detectedProducts = await this.detectProductNames(query, productName);
-      if (detectedProducts.length > 0) {
-        detectedProducts = await this.verifyProductMatchesWithLLM(query, detectedProducts);
-      }
-    }
-
-    // Step 2: Normalize query by replacing misspellings with correct product names
-    const normalizedQuery = this.normalizeQuery(query, detectedProducts);
-
-    // Step 2.5: Detect query type - catalog, comparison, or regular
-    const [isCatalog, isComparison] = await Promise.all([
-      this.isProductCatalogQuery(normalizedQuery),
-      this.isComparisonQuery(normalizedQuery)
-    ]);
+    // Extract results from comprehensive analysis
+    const detectedProducts = analysis.detectedProducts;
+    const isCatalog = analysis.isCatalogQuery;
+    const isComparison = analysis.isComparisonQuery;
     const isMultiProduct = detectedProducts.length > 1;
 
-    // Step 3: Classify query type and determine if RAG is needed
-    const classification = await this.classifyQuery(normalizedQuery, companyContext);
+    // Log detection results
+    if (analysis.isSpecificProductQuery && detectedProducts.length > 0) {
+      console.log(`🎯 Specific product query detected - Products: ${detectedProducts.join(', ')}`);
+    } else if (!analysis.isSpecificProductQuery) {
+      console.log(`🔓 Category/recommendation query - No product lock`);
+    }
+
+    // Normalize query by replacing misspellings with correct product names
+    const normalizedQuery = this.normalizeQuery(query, detectedProducts);
 
     // If RAG is not needed, return early with direct response
-    if (!classification.needsRAG && classification.directResponse) {
+    if (!analysis.needsRAG && analysis.directResponse) {
       return {
         originalQuery: query,
         normalizedQuery,
         detectedProducts,
         expandedQueries: [normalizedQuery],
-        queryType: classification.queryType,
+        queryType: analysis.queryType,
         needsRAG: false,
-        directResponse: classification.directResponse,
-        queryIntent: classification.intent,
+        directResponse: analysis.directResponse,
+        queryIntent: analysis.intent,
         searchQueries: [normalizedQuery],
         isMultiProductQuery: false,
       };
@@ -149,7 +269,7 @@ export class AdvancedQueryExpander {
       searchQueries = await this.generateMultipleSearchQueries(
         normalizedQuery,
         detectedProducts,
-        classification.queryType,
+        analysis.queryType,
         companyContext,
         maxQueries
       );
@@ -179,9 +299,9 @@ export class AdvancedQueryExpander {
       normalizedQuery,
       detectedProducts,
       expandedQueries,
-      queryType: isCatalog ? 'catalog' : classification.queryType,
+      queryType: isCatalog ? 'catalog' : analysis.queryType,
       needsRAG: true,
-      queryIntent: classification.intent,
+      queryIntent: analysis.intent,
       searchQueries,
       isMultiProductQuery: isMultiProduct && isComparison,
       comparisonProducts: isComparison && isMultiProduct ? detectedProducts : undefined,
