@@ -18,7 +18,7 @@ declare global {
   var processedEvents: Set<string> | undefined;
 }
 
-const upload = multer({ 
+const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
@@ -32,7 +32,7 @@ const upload = multer({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  
+
   // Get all documents
   app.get("/api/documents", async (req, res) => {
     try {
@@ -47,7 +47,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/documents/upload-url", async (req, res) => {
     try {
       const { url, name } = req.body;
-      
+
       if (!url) {
         return res.status(400).json({ message: "URL is required" });
       }
@@ -63,7 +63,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert Google Drive URLs to direct download format
       let downloadUrl = url;
       let isGoogleDrive = false;
-      
+
       if (url.includes('drive.google.com')) {
         const googleDriveId = extractGoogleDriveId(url);
         if (!googleDriveId) {
@@ -77,7 +77,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const urlLower = url.toLowerCase();
         const isPdf = urlLower.includes('.pdf') || urlLower.includes('pdf');
         const isMarkdown = urlLower.includes('.md') || urlLower.includes('.markdown');
-        
+
         if (!isPdf && !isMarkdown) {
           return res.status(400).json({ message: "URL must point to a PDF or Markdown (.md) file" });
         }
@@ -91,30 +91,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
       });
-      
+
       if (!response.ok) {
         if (isGoogleDrive && response.status === 403) {
-          return res.status(400).json({ 
-            message: "Google Drive file is not publicly accessible. Please ensure the file is shared with 'Anyone with the link' permission." 
+          return res.status(400).json({
+            message: "Google Drive file is not publicly accessible. Please ensure the file is shared with 'Anyone with the link' permission."
           });
         }
         return res.status(400).json({ message: `Failed to download file: ${response.statusText}` });
       }
 
       const contentType = response.headers.get('content-type');
-      
+
       // For Google Drive, we might get HTML if the file is not publicly accessible
       if (isGoogleDrive && contentType && contentType.includes('text/html')) {
-        return res.status(400).json({ 
-          message: "Google Drive file is not publicly accessible or requires authentication. Please ensure the file is shared with 'Anyone with the link' permission." 
+        return res.status(400).json({
+          message: "Google Drive file is not publicly accessible or requires authentication. Please ensure the file is shared with 'Anyone with the link' permission."
         });
       }
-      
+
       // Validate content type for non-Google Drive URLs
       if (!isGoogleDrive && contentType) {
         const isPdfContent = contentType.includes('pdf');
         const isMarkdownContent = contentType.includes('text/markdown') || contentType.includes('text/plain');
-        
+
         if (!isPdfContent && !isMarkdownContent) {
           return res.status(400).json({ message: "URL does not point to a PDF or Markdown file" });
         }
@@ -131,10 +131,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const urlLower = url.toLowerCase();
       const isPdfUrl = urlLower.includes('.pdf') || urlLower.includes('pdf');
       const isMarkdownUrl = urlLower.includes('.md') || urlLower.includes('.markdown');
-      
+
       let fileType = 'pdf'; // default for Google Drive
       let isValidFile = false;
-      
+
       if (isPdfUrl || (!isMarkdownUrl && !isPdfUrl)) {
         // Check if it's a PDF
         if (isPdfBuffer(buffer)) {
@@ -142,7 +142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isValidFile = true;
         }
       }
-      
+
       if (isMarkdownUrl || (!isPdfUrl && !isMarkdownUrl)) {
         // Check if it's a markdown file (text content)
         const textContent = buffer.toString('utf-8');
@@ -151,7 +151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isValidFile = true;
         }
       }
-      
+
       if (!isValidFile) {
         return res.status(400).json({ message: "Downloaded file is not a valid PDF or Markdown file" });
       }
@@ -177,7 +177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileType: fileType,
         fileSize: fileSize,
         status: "uploading",
-        metadata: { 
+        metadata: {
           sourceUrl: url, // Store original URL, not the converted one
           downloadUrl: downloadUrl, // Store the actual download URL used
           uploadType: 'url',
@@ -189,17 +189,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         // Process document with URL reference
         await documentProcessor.processDocument(document, buffer, url);
-        
+
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
         await storage.deleteDocument(document.id);
         res.json(processedDocument);
       } catch (processingError) {
         console.error(`Failed to process document ${document.id}:`, processingError);
-        res.status(500).json({ 
-          message: "Document upload succeeded but processing failed", 
+        res.status(500).json({
+          message: "Document upload succeeded but processing failed",
           error: (processingError as Error).message,
-          document 
+          document
         });
       }
     } catch (error) {
@@ -216,7 +216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { originalname, mimetype, size, buffer } = req.file;
-      
+
       // Determine file type
       let fileType = 'unknown';
       if (mimetype === 'application/pdf') fileType = 'pdf';
@@ -231,7 +231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileType,
         fileSize: size,
         status: "uploading",
-        metadata: { 
+        metadata: {
           mimetype,
           uploadType: 'file'
         },
@@ -241,11 +241,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Process document synchronously with timeout
         await Promise.race([
           documentProcessor.processDocument(document, buffer),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Document processing timeout')), env.API_TIMEOUT)
           )
         ]);
-        
+
         // Get the updated document with final status
         const processedDocument = await storage.getDocument(document.id);
         await storage.deleteDocument(document.id);
@@ -253,10 +253,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (processingError) {
         // If processing fails, return error with document info
         console.error(`Failed to process document ${document.id}:`, processingError);
-        res.status(500).json({ 
-          message: "Document upload succeeded but processing failed", 
+        res.status(500).json({
+          message: "Document upload succeeded but processing failed",
           error: (processingError as Error).message,
-          document 
+          document
         });
       }
     } catch (error) {
@@ -268,13 +268,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/documents/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      
+
       // Delete from vector database
       await documentProcessor.deleteDocumentFromVector(id);
-      
+
       // Delete from storage
       await storage.deleteDocument(parseInt(id, 10));
-      
+
       res.json({ message: "Document deleted successfully" });
     } catch (error) {
       console.error('Document deletion error:', (error as Error).message);
@@ -285,9 +285,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Chat endpoint
   app.post("/api/chat", async (req, res) => {
     try {
-      const { 
-        message, 
-        retrievalCount, 
+      const {
+        message,
+        retrievalCount,
         similarityThreshold,
         productName = "",
         companyContext,
@@ -301,7 +301,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         performanceMode,           // ⚡ New: 'fast' | 'balanced' | 'accurate'
         formatAsMarkdown = true,  // New: Format response in Markdown (true) or structured plain text (false)
       } = req.body;
-      
+
       if (!message) {
         return res.status(400).json({ message: "Message is required" });
       }
@@ -336,7 +336,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Legacy RAG
       const result = await ragService.queryDocuments(message, {
         retrievalCount: retrievalCount || 10,
-        similarityThreshold: similarityThreshold ||  0.5,
+        similarityThreshold: similarityThreshold || 0.5,
         productName: productName,
         companyContext: companyContext // Optional: { companyName, companyDescription, productCategories }
       });
@@ -350,17 +350,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Customer-facing ecommerce chatbot endpoint
   app.post("/api/customer/query", async (req, res) => {
     try {
-      const { 
-        query, 
-        category = "", 
-        userId, 
+      const {
+        query,
+        category = "",
+        userId,
         sessionId,
-        retrievalCount = 20,
-        similarityThreshold = 0.5 
+        retrievalCount = 15,
+        similarityThreshold = 0.45,
+        conversationHistory = [],
+        maxHistoryMessages = 5
       } = req.body;
-      
+
       if (!query || typeof query !== 'string' || query.trim().length === 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Query is required and must be a non-empty string",
           error: "INVALID_QUERY"
         });
@@ -368,9 +370,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Validate query length
       if (query.length > 1000) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Query is too long (max 1000 characters)",
           error: "QUERY_TOO_LONG"
+        });
+      }
+
+      // Validate conversation history if provided
+      if (conversationHistory && !Array.isArray(conversationHistory)) {
+        return res.status(400).json({
+          message: "conversationHistory must be an array of message objects",
+          error: "INVALID_HISTORY"
         });
       }
 
@@ -381,31 +391,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId,
         sessionId,
         retrievalCount,
-        similarityThreshold
+        similarityThreshold,
+        conversationHistory,
+        maxHistoryMessages
       });
 
       // Add response metadata
       const responseWithMetadata = {
         ...result,
-        metadata: {
-          timestamp: new Date().toISOString(),
-          userId: userId || null,
-          sessionId: sessionId || null,
-          processingTime: Date.now(),
-          apiVersion: "1.0"
-        }
+        timestamp: new Date().toISOString(),
+        userId: userId || null,
+        sessionId: sessionId || null,
       };
 
       res.json(responseWithMetadata);
     } catch (error) {
       console.error('Customer query error:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Sorry, I'm having trouble processing your request. Please try again.",
         error: "PROCESSING_ERROR",
+        suggestedFollowups: [
+          "Could you try rephrasing your question?",
+          "What product are you looking for?",
+          "Would you like to see our popular products?"
+        ],
         details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
       });
     }
   });
+
 
   // Ingest QA pairs (manual text answers)
   app.post("/api/qa-pairs", async (req, res) => {
@@ -458,7 +472,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/documents/batch-upload-urls", async (req, res) => {
     try {
       const { urls, concurrency, retryAttempts } = req.body;
-      
+
       if (!urls || !Array.isArray(urls) || urls.length === 0) {
         return res.status(400).json({ message: "URLs array is required and cannot be empty" });
       }
@@ -535,14 +549,14 @@ function extractGoogleDriveId(url: string): string | null {
     /\/file\/d\/([a-zA-Z0-9-_]+)/,  // /file/d/FILE_ID
     /[?&]id=([a-zA-Z0-9-_]+)/,      // ?id=FILE_ID or &id=FILE_ID
   ];
-  
+
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match && match[1]) {
       return match[1];
     }
   }
-  
+
   return null;
 }
 

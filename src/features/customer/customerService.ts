@@ -1,6 +1,38 @@
 import { ragService } from "../rag/core/ragService.js";
+import { qdrantService, SearchResult } from "../rag/providers/qdrantHybrid.js";
 import { inferenceProvider } from "../../services/llm/inference.js";
 
+// ============================================================================
+// INTERFACES
+// ============================================================================
+
+/**
+ * Conversation message for maintaining context
+ */
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: string;
+  productsMentioned?: string[];
+}
+
+/**
+ * Product with actionable information for WhatsApp
+ */
+export interface ProductRecommendation {
+  name: string;
+  description: string;
+  price?: string;
+  imageUrl?: string;
+  productUrl?: string;
+  ctaText?: string;
+  relevanceReason?: string;
+  features?: string[];
+}
+
+/**
+ * Options for processing customer queries
+ */
 export interface CustomerQueryOptions {
   productName?: string;
   category?: string;
@@ -8,8 +40,13 @@ export interface CustomerQueryOptions {
   sessionId?: string;
   retrievalCount?: number;
   similarityThreshold?: number;
+  conversationHistory?: ConversationMessage[];
+  maxHistoryMessages?: number;
 }
 
+/**
+ * Enhanced response for WhatsApp chatbot
+ */
 export interface CustomerQueryResponse {
   query: string;
   response: string;
@@ -18,791 +55,590 @@ export interface CustomerQueryResponse {
     confidence: number;
     suggestedActions: string[];
   };
-  clarifyingQuestions?: string[];
+  suggestedFollowups: string[];
   productNames?: string[];
   recommendations?: {
-    products: Array<{
-      name: string;
-      description: string;
-      price?: string;
-      features: string[];
-      sourceUrl?: string;
-    }>;
+    products: ProductRecommendation[];
   };
-  sources: Array<{
-    documentId: number;
-    filename: string;
-    content: string;
-    score: number;
-    metadata?: any;
-    sourceUrl?: string;
-    uploadType?: string;
-  }>;
   contextAnalysis: {
     isContextMissing: boolean;
     suggestedTopics: string[];
     category: string;
     priority: 'low' | 'medium' | 'high';
   };
-  agentType?: 'product_specialist' | 'support_agent' | 'sales_agent' | 'clarification_agent';
+  agentType?: 'sales_expert';
+  metadata?: {
+    responseTimeMs: number;
+    contextChunksUsed: number;
+  };
 }
+
+// ============================================================================
+// INTELLIGENT SALES AGENT SERVICE
+// ============================================================================
 
 export class CustomerService {
-  private readonly AGENT_PROMPTS = {
-    product_specialist: `
-You are a helpful product expert. Your goal is to help customers find the right products in a friendly, conversational way.
-
-CUSTOMER QUERY: {query}
-INTENT: {intent}
-
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context from uploaded product documentation
-2. NEVER mention "product documentation", "uploaded documents", or technical details
-3. Respond as a human product expert, not an AI
-4. Keep responses conversational and natural (300-500 words max)
-5. Focus on customer benefits, not technical specs
-6. NEVER mention pricing unless specifically asked about price/cost
-7. When mentioning prices, always use rupees (₹) currency
-8. ALWAYS use markdown formatting for better readability
-9. Structure responses with clear sections and organization
-10. **CRITICALLY IMPORTANT**: Use EXACT product names from the context - NEVER use generic names like "Arch Support Insoles" or "Gel Insoles". Always use the full specific product name (e.g., "Frido Arch Sports Insole", "Frido Silicone Gel Insole")
-11. **DO NOT MAKE UP PRODUCTS**: Only mention products that are explicitly mentioned in the provided context
-
-RESPONSE STRUCTURE (USE MARKDOWN):
-- Start with a friendly acknowledgment paragraph
-- Use **bold** for product names and key terms
-- Use bullet points (•) for listing products and features
-- Group related products under subheadings (###) if needed
-- Use line breaks for better readability
-- End with a clear call-to-action
-
-MARKDOWN FORMATTING RULES:
-- Use **bold** for product names, key features, and important terms
-- Use ### for category subheadings if showing multiple product types
-- Use bullet points (•) with proper spacing for lists
-- Use line breaks (\n\n) between sections for clarity
-- Make the response scannable and easy to read
-- Use emojis sparingly only when they add value (e.g., 🏃 for sports, 👣 for foot care)
-
-RESPONSE GUIDELINES:
-- **MUST USE EXACT PRODUCT NAMES**: Always copy product names exactly as they appear in the context (e.g., "Frido Arch Sports Insole", not "Sports Insole" or "Arch Support Insole")
-- Be warm, friendly, and enthusiastic - write like you're genuinely excited to help
-- Focus on what the customer gets (benefits), not technical details
-- Use "you" and "your" to make it personal
-- Avoid jargon - use simple, everyday language
-- Don't mention being an AI or using documentation
-- Present information in a structured, scannable format
-- Only mention prices when specifically asked about cost
-- Always use ₹ symbol for Indian rupees
-- Group related products logically if there are many
-- Use transitions like "For", "If you need", "We also have", "Additionally"
-- Keep product descriptions brief (1 sentence max) unless specifically asked for details
-
-EXAMPLE RESPONSE FORMAT:
-Certainly! [Brief friendly acknowledgment of their need].
-
-• **Frido Arch Sports Insole** - [Brief 1-sentence benefit]
-• **Frido Silicone Gel Insole** - [Brief 1-sentence benefit]
-• **Frido Plantar Fasciitis Pain Relief Ortho Insole** - [Brief 1-sentence benefit]
-• **Frido Dual Gel Insoles** - [Brief 1-sentence benefit]
-• **Frido Arch Support Insoles - Semi Rigid** - [Brief 1-sentence benefit]
-• **Frido Memory Foam Insole** - [Brief 1-sentence benefit]
-
-[Closing sentence with clear next step or question to guide them further]
-
-IMPORTANT: At the very end of your response, on a new line, list ALL EXACT product names you mentioned using this format:
-[PRODUCTS: Frido Arch Sports Insole, Frido Silicone Gel Insole, Frido Plantar Fasciitis Pain Relief Ortho Insole, Frido Dual Gel Insoles, Frido Arch Support Insoles - Semi Rigid, Frido Memory Foam Insole].
-If you are giving a list of products, then the response is of no use. You need to list all the mentioned products.
-
-NOTE: Product names in [PRODUCTS: ...] MUST be EXACTLY as they appear in the context, including "Frido" brand name and full product title.
-
-CONTEXT FROM PRODUCT DOCUMENTATION:
-{context}
-`,
-
-    sales_agent: `
-You are a friendly sales expert who helps customers make great purchase decisions.
-
-CUSTOMER QUERY: {query}
-INTENT: {intent}
-
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context from uploaded product documentation
-2. NEVER mention "product documentation", "uploaded documents", or technical details
-3. Respond as a human sales expert, not an AI
-4. Keep responses conversational and natural (300-500 words max)
-5. Focus on value and benefits, not technical specs
-6. **MANDATORY**: List ALL products mentioned in the context - do not skip any products
-7. NEVER mention pricing unless specifically asked about price/cost
-8. When mentioning prices, always use rupees (₹) currency
-9. Create excitement about the products
-10. Guide toward purchase
-11. ALWAYS use markdown formatting for better readability
-12. **CRITICALLY IMPORTANT**: Use EXACT product names from the context - NEVER use generic names. Always use the full specific product name (e.g., "Frido Arch Sports Insole", "Frido Dual Gel Insoles")
-13. **DO NOT MAKE UP PRODUCTS**: Only mention products that are explicitly mentioned in the provided context
-
-RESPONSE STRUCTURE (USE MARKDOWN):
-- Start with an enthusiastic acknowledgment
-- Use **bold** for product names and key selling points
-- Use bullet points (•) for listing products with benefits
-- Group related products under subheadings (###) if multiple categories
-- Use line breaks for better readability
-- Create excitement naturally (popular choice, best for X, etc.)
-- End with a compelling call-to-action
-
-MARKDOWN FORMATTING RULES:
-- Use **bold** for product names, key benefits, and value propositions
-- Use ### for category subheadings if showing multiple product types
-- Use bullet points (•) with proper spacing for product lists
-- Use line breaks (\n\n) between sections for clarity
-- Make the response engaging and scannable
-- Use emojis sparingly only when they enhance the message (e.g., ⭐ for popular items, ✨ for premium)
-
-RESPONSE GUIDELINES:
-- **MANDATORY**: List EVERY SINGLE product found in the context - this is non-negotiable
-- **MUST USE EXACT PRODUCT NAMES**: Always copy product names exactly as they appear in the context (e.g., "Frido Dual Gel Insoles", not "Gel Insoles")
-- Be enthusiastic and genuine - write like you're genuinely excited to help them find the perfect product
-- Focus on what they'll love and the value they'll get
-- Use "you" and "your" to make it personal
-- Avoid jargon - use simple, everyday language
-- Don't mention being an AI or using documentation
-- Present products in a structured, scannable format
-- Only mention prices when specifically asked about cost
-- Always use ₹ symbol for Indian rupees
-- Create natural urgency (popular choice, perfect for X, customers love this)
-- Group related products logically if needed
-- Use transitions like "Perfect for", "Great option", "If you're looking for", "Popular choice"
-- Highlight unique selling points for each product from the context
-- **PRIORITY**: Listing ALL products is more important than detailed descriptions
-
-EXAMPLE RESPONSE FORMAT:
-Great choice! [Enthusiastic acknowledgment about their interest].
-
-• **Frido Arch Sports Insole** - [Highlight key benefit from context and why it's perfect for them]
-• **Frido Dual Gel Insoles** - [Emphasize value and unique selling point from context]
-• **Frido Silicone Gel Insole** - [Create excitement about features from context]
-• **Frido Plantar Fasciitis Pain Relief Ortho Insole** - [Highlight key benefit]
-• **Frido Arch Support Insoles - Semi Rigid** - [Emphasize value]
-
-[Closing with excitement and clear call-to-action like "Which one catches your eye?" or "Would you like to know more about any of these?"]
-
-IMPORTANT: At the very end of your response, on a new line, list ALL EXACT product names you mentioned using this format:
-[PRODUCTS: Frido Arch Sports Insole, Frido Dual Gel Insoles, Frido Silicone Gel Insole, Frido Plantar Fasciitis Pain Relief Ortho Insole, Frido Arch Support Insoles - Semi Rigid]
-
-NOTE: Product names in [PRODUCTS: ...] MUST be EXACTLY as they appear in the context, including "Frido" brand name and full product title.
-
-CONTEXT FROM PRODUCT DOCUMENTATION:
-{context}
-`,
-
-    support_agent: `
-You are a helpful customer support expert who solves problems and answers questions.
-
-CUSTOMER QUERY: {query}
-INTENT: {intent}
-
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context from uploaded product documentation
-2. NEVER mention "product documentation", "uploaded documents", or technical details
-3. Respond as a human support expert, not an AI
-4. Keep responses concise but helpful (100-150 words max)
-5. Focus on solutions, not technical details
-6. Be empathetic and understanding
-7. Provide clear next steps
-8. Use markdown formatting for clarity
-
-RESPONSE STRUCTURE (USE MARKDOWN):
-- Start with empathetic acknowledgment
-- Use **bold** for important points and action items
-- Use bullet points (•) for steps or multiple pieces of information
-- Use line breaks for readability
-- End with clear next steps or offer to help further
-
-MARKDOWN FORMATTING RULES:
-- Use **bold** for key action items and important information
-- Use bullet points (•) for step-by-step instructions or multiple points
-- Use line breaks (\n\n) between sections for clarity
-- Keep formatting simple and focused on clarity
-
-RESPONSE GUIDELINES:
-- Be warm, empathetic, and understanding
-- Focus on solving their problem quickly
-- Use "you" and "your" to make it personal
-- Avoid jargon - use simple, everyday language
-- Don't mention being an AI or using documentation
-- Provide clear, actionable steps
-- Offer to connect with a specialist if the issue is complex
-- Show genuine concern for their issue
-
-EXAMPLE RESPONSE FORMAT:
-I understand [acknowledge their concern]. Let me help you with that.
-
-**Here's what you can do:**
-• [Step 1 or solution point]
-• [Step 2 or solution point]
-
-[Closing with offer for additional help or reassurance]
-
-IMPORTANT: If you mention any product names in your response, list them at the very end on a new line using this exact format:
-[PRODUCTS: Product Name 1, Product Name 2]
-
-CONTEXT FROM PRODUCT DOCUMENTATION:
-{context}
-`,
-
-    clarification_agent: `
-You are a helpful product expert who asks a few quick questions to find the perfect product for customers.
-
-CUSTOMER QUERY: {query}
-INTENT: {intent}
-
-CRITICAL INSTRUCTIONS:
-1. Use ONLY the provided context from uploaded product documentation
-2. NEVER mention "product documentation", "uploaded documents", or technical details
-3. Respond as a human product expert, not an AI
-4. Keep responses concise but warm (75-125 words max)
-5. Provide some initial guidance if context is available
-6. Ask 2-3 simple, helpful questions
-7. Make questions easy to answer
-8. Use markdown formatting for clarity
-9. **IMPORTANT**: If you mention any products, use EXACT product names from the context (e.g., "Frido Arch Sports Insole"), not generic names
-10. **DO NOT MAKE UP PRODUCTS**: Only mention products that are explicitly in the provided context
-
-RESPONSE STRUCTURE (USE MARKDOWN):
-- Start with warm acknowledgment and initial guidance
-- Provide helpful context if available
-- Ask 2-3 simple questions to understand their needs better
-- Make it conversational and easy to respond to
-
-MARKDOWN FORMATTING RULES:
-- Use **bold** for key terms or options they should consider
-- Use bullet points (•) if listing options or examples
-- Keep formatting minimal and friendly
-- Use line breaks for readability
-
-RESPONSE GUIDELINES:
-- Be warm, friendly, and conversational
-- Ask simple, specific questions that guide them
-- Focus on understanding their specific needs
-- Use "you" and "your" to make it personal
-- Avoid jargon - use simple, everyday language
-- Don't mention being an AI or using documentation
-- Keep questions short and easy to answer
-- Make them feel comfortable sharing more details
-
-EXAMPLE RESPONSE FORMAT:
-[Warm acknowledgment of their interest]. [Brief helpful context if available].
-
-To help me recommend the perfect option for you, could you share:
-• [Simple question 1]?
-• [Simple question 2]?
-
-[Friendly closing that encourages them to respond]
-
-IMPORTANT: If you mention any product names in your response, list them at the very end on a new line using this exact format:
-[PRODUCTS: Product Name 1, Product Name 2]
-
-CONTEXT FROM PRODUCT DOCUMENTATION:
-{context}
-`
-  };
 
   /**
-   * Determine if query needs clarification for better product recommendations
-   * Only ask for clarification in extreme cases where we cannot provide any helpful response
+   * The unified intelligent sales prompt that combines intent analysis,
+   * response generation, follow-up questions, and recommendations
    */
-  private async needsClarification(query: string, intent: any): Promise<{
-    needsClarification: boolean;
-    clarifyingQuestions: string[];
-  }> {
-    try {
-      const systemPrompt = `Analyze if this customer query ABSOLUTELY needs clarification before providing any product recommendations.
+  private readonly INTELLIGENT_SALES_PROMPT = `
+You are an ELITE AI Sales Expert and Personal Shopping Assistant. You are NOT a generic chatbot - you are a sophisticated, charming, and incredibly knowledgeable sales professional who genuinely cares about finding the perfect product for each customer.
 
-Return ONLY a JSON object with this structure:
+═══════════════════════════════════════════════════════════════════════════════
+🎯 YOUR MISSION
+═══════════════════════════════════════════════════════════════════════════════
+Turn every interaction into a delightful shopping experience. You are the customer's trusted advisor, product expert, and personal assistant rolled into one. Your goal is to:
+1. Understand their needs deeply (even when they're vague)
+2. Recommend the PERFECT products with genuine enthusiasm  
+3. Create urgency and excitement naturally (never pushy)
+4. Guide them toward purchase with helpful suggestions
+5. Keep them engaged with smart follow-up questions
+
+═══════════════════════════════════════════════════════════════════════════════
+📋 CUSTOMER QUERY
+═══════════════════════════════════════════════════════════════════════════════
+{query}
+
+═══════════════════════════════════════════════════════════════════════════════
+💬 CONVERSATION HISTORY (for context)
+═══════════════════════════════════════════════════════════════════════════════
+{conversationHistory}
+
+═══════════════════════════════════════════════════════════════════════════════
+📚 PRODUCT KNOWLEDGE BASE
+═══════════════════════════════════════════════════════════════════════════════
+{context}
+
+═══════════════════════════════════════════════════════════════════════════════
+🧠 RESPONSE REQUIREMENTS - RETURN VALID JSON ONLY
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST respond with a valid JSON object in EXACTLY this format (no markdown, no code blocks):
+
 {
-  "needsClarification": boolean,
-  "clarifyingQuestions": ["question1", "question2", "question3"]
+  "intent": {
+    "type": "product_inquiry|purchase_intent|support|general|comparison",
+    "confidence": 0.0-1.0,
+    "suggestedActions": ["action1", "action2"]
+  },
+  "response": "Your friendly, expert response here...",
+  "productNames": ["Exact Product Name 1", "Exact Product Name 2"],
+  "suggestedFollowups": [
+    "Question to keep them engaged 1?",
+    "Question to guide toward purchase 2?",
+    "Cross-sell/upsell question 3?"
+  ],
+  "recommendations": [
+    {
+      "name": "Exact Product Name",
+      "description": "Brief compelling description",
+      "price": "₹XXX (if available in context)",
+      "relevanceReason": "Why this is perfect for them"
+    }
+  ]
 }
 
-ONLY ask for clarification if the query is EXTREMELY vague and you cannot provide ANY helpful product recommendations. Examples that need clarification:
-- "I need something" (no product category mentioned)
-- "What's good?" (no context at all)
-- "Help me choose" (no product type specified)
-- "I want to buy something" (completely vague)
+═══════════════════════════════════════════════════════════════════════════════
+✨ SALES EXCELLENCE GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
 
-DO NOT ask for clarification if the query has ANY of these elements:
-- Mentions a product category (laptop, phone, headphones, etc.)
-- Mentions a use case (work, gaming, music, etc.)
-- Mentions a price range or budget
-- Mentions specific features or requirements
-- Mentions a brand or model
-- Asks about comparisons or alternatives
-- Has any context that allows for product recommendations
+🎨 PERSONALITY & TONE:
+• Be warm, enthusiastic, and genuinely helpful - like a friend who happens to be an expert
+• Use "you" and "your" to make it personal
+• Show excitement about great products: "This is perfect for you!" "Customers love this!"
+• Be conversational - write like you're chatting on WhatsApp, not writing an essay
+• Use emojis sparingly but effectively (1-2 per response max) 🎯 ✨
 
-Examples that DO NOT need clarification:
-- "I need a laptop" → Recommend laptops based on common use cases
-- "What's a good phone?" → Recommend popular phones
-- "I want headphones under $100" → Recommend budget headphones
-- "Best laptop for work" → Recommend business laptops
-- "Gaming laptop" → Recommend gaming laptops
+📝 RESPONSE STRUCTURE:
+• Keep responses concise (150-250 words max) - perfect for mobile reading
+• Use bullet points (•) for product features or options
+• Bold **key benefits** and **product names** using markdown
+• Start with acknowledgment of their need, then dive into recommendations
+• End with a clear direction (not just "let me know")
 
-Generate 2-3 specific, helpful clarifying questions ONLY if clarification is absolutely necessary.`;
+🛒 SALES INTELLIGENCE:
+• ALWAYS suggest 2-3 products when relevant (give options!)
+• Highlight the BEST VALUE option naturally
+• Mention "popular choice" or "customer favorite" when applicable
+• Create gentle urgency: "This has been flying off the shelves"
+• Cross-sell: "This pairs perfectly with..." / "Many customers also get..."
+• Upsell subtly: "For even better results, the Pro version..."
 
-      const response = await inferenceProvider.chatCompletion(
-        systemPrompt,
-        query,
-        { temperature: 0.1, maxTokens: 300 }
-      );
+⚠️ CRITICAL - MULTI-PRODUCT QUERIES:
+• The context is organized by product with headers like "=== PRODUCT: Product Name ==="
+• When the user asks about multiple products, provide information for EACH product
+• Example: If user asks "what colors?" and 2 products are in context, list colors for BOTH products
+• Format multi-product answers clearly: "**Product A** comes in X, Y, Z. **Product B** comes in A, B, C."
 
-      const result = JSON.parse(response || '{}');
-      return {
-        needsClarification: result.needsClarification || false,
-        clarifyingQuestions: result.clarifyingQuestions || []
-      };
-    } catch (error) {
-      console.error('Clarification analysis failed:', error);
-      return {
-        needsClarification: false,
-        clarifyingQuestions: []
-      };
-    }
-  }
-
-  /**
-   * Select the appropriate agent based on intent and context
-   */
-  private selectAgent(intent: any, needsClarification: boolean): 'product_specialist' | 'support_agent' | 'sales_agent' | 'clarification_agent' {
-    if (needsClarification) {
-      return 'clarification_agent';
-    }
-
-    switch (intent.type) {
-      case 'product_inquiry':
-      case 'comparison':
-        return 'product_specialist';
-      case 'purchase_intent':
-        return 'sales_agent';
-      case 'support':
-        return 'support_agent';
-      default:
-        return 'product_specialist';
-    }
-  }
-
-  /**
-   * Analyze customer query intent to provide better responses
-   */
-  private async analyzeCustomerIntent(query: string): Promise<{
-    type: 'product_inquiry' | 'purchase_intent' | 'support' | 'general' | 'comparison' | 'clarification_needed';
-    confidence: number;
-    suggestedActions: string[];
-  }> {
-    try {
-      const systemPrompt = `Analyze this customer query to determine their intent and suggest appropriate actions.
-
-Return ONLY a JSON object with this structure:
-{
-  "type": "product_inquiry|purchase_intent|support|general|comparison",
-  "confidence": 0.0-1.0,
-  "suggestedActions": ["action1", "action2", "action3"]
-}
-
-Intent Types (be generous with classification):
-- product_inquiry: ANY query about products, recommendations, features, specifications, "what's good", "best", "need", "want"
-- purchase_intent: Explicitly mentioning buying, purchasing, ordering, checkout, "I want to buy"
-- support: Having issues, problems, troubleshooting, returns, "not working", "broken", "help with"
-- general: Only pure greetings like "hello", "hi", "how are you"
-- comparison: Explicitly comparing products, "vs", "difference between", "alternative to"
-
-DEFAULT to product_inquiry for most queries. Only use other intents for very clear cases.
+❓ FOLLOW-UP QUESTIONS (CRITICAL - Always provide 3):
+• Question 1: Clarifying question about their specific needs
+• Question 2: Question that leads toward purchase decision
+• Question 3: Cross-sell or upsell suggestion as a question
 
 Examples:
-- "I need a laptop" → product_inquiry
-- "What's a good phone?" → product_inquiry  
-- "Best headphones under $100" → product_inquiry
-- "I want to buy a laptop" → purchase_intent
-- "My laptop is broken" → support
-- "Hello" → general
-- "iPhone vs Samsung" → comparison
+- "Would you like me to check the current availability for you?"
+- "Should I compare a few options based on your budget?"
+- "Would you also need [complementary product] to go with this?"
+- "Have you considered the premium version with [extra benefit]?"
 
-Suggested Actions (choose 2-3 most relevant):
-- "recommend_products"
-- "show_pricing"
-- "provide_specifications"
-- "offer_support"
-- "suggest_alternatives"
-- "guide_to_checkout"
-- "schedule_demo"
-- "contact_sales"`;
+🚫 NEVER DO:
+• Never say "I don't have information" - find related helpful info instead
+• Never mention "documentation" or "uploaded files" or being an AI
+• Never give long walls of text - keep it scannable
+• Never end without a clear next step or question
+• Never ignore the conversation history if provided
 
-      const response = await inferenceProvider.chatCompletion(
-        systemPrompt,
-        query,
-        { temperature: 0.1, maxTokens: 300 }
-      );
+💡 SPECIAL SCENARIOS:
+• GREETING: Be warm, ask what they're looking for today
+• VAGUE QUERY: Give your best recommendation AND ask a clarifying question
+• COMPARISON: Create a quick side-by-side with clear winner recommendation
+• PRICE QUERY: Share price AND highlight value/benefits
+• SUPPORT ISSUE: Be empathetic, solve quickly, then suggest relevant products
 
-      const result = JSON.parse(response || '{}');
-      return {
-        type: result.type || 'product_inquiry',
-        confidence: result.confidence || 0.7,
-        suggestedActions: result.suggestedActions || ['recommend_products']
-      };
-    } catch (error) {
-      console.error('Customer intent analysis failed:', error);
-      return {
-        type: 'product_inquiry',
-        confidence: 0.7,
-        suggestedActions: ['recommend_products']
-      };
-    }
-  }
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ CRITICAL REMINDERS
+═══════════════════════════════════════════════════════════════════════════════
+1. Use EXACT product names from the context - never make up generic names
+2. Only mention products that exist in the provided context
+3. Prices in ₹ (Indian Rupees) only
+4. ALWAYS provide exactly 3 suggestedFollowups
+5. Response must be valid JSON - no markdown code blocks around it
+`;
 
   /**
-   * Generate response using the selected agent
-   */
-  private async generateAgentResponse(
-    query: string,
-    intent: { type: string; confidence: number; suggestedActions: string[] },
-    agentType: 'product_specialist' | 'support_agent' | 'sales_agent' | 'clarification_agent',
-    contextChunks: Array<{ id: string; content: string; originalData: any }>
-  ): Promise<{
-    response: string;
-    usedChunkIds: string[];
-    productNames?: string[];
-    recommendations?: {
-      products: Array<{
-        name: string;
-        description: string;
-        price?: string;
-        features: string[];
-        sourceUrl?: string;
-      }>;
-    };
-  }> {
-    const context = contextChunks.map(chunk => chunk.content).join('\n\n---\n\n');
-    console.log("🚀 ~ CustomerService ~ generateAgentResponse ~ context:", context);
-    
-    const systemPrompt = this.AGENT_PROMPTS[agentType]
-      .replace('{query}', query)
-      .replace('{intent}', JSON.stringify(intent))
-      .replace('{context}', context);
-
-    const response = await inferenceProvider.chatCompletion(
-      systemPrompt,
-      query,
-      { temperature: 0.1, maxTokens: 1200 } // Increased max tokens to accommodate all products
-    );
-
-    // Extract used chunk IDs
-    const usedChunkIds: string[] = [];
-    const chunkIdPattern = /\[USED_CHUNK: (\w+)\]/g;
-    let match;
-    while ((match = chunkIdPattern.exec(response)) !== null) {
-      if (!usedChunkIds.includes(match[1])) {
-        usedChunkIds.push(match[1]);
-      }
-    }
-
-    // Extract product names from response
-    const productNames: string[] = [];
-    const productPattern = /\[PRODUCTS:\s*([^\]]+)\]/;
-    const productMatch = response.match(productPattern);
-    if (productMatch && productMatch[1]) {
-      const names = productMatch[1]
-        .split(',')
-        .map(name => name.trim())
-        .filter(name => name.length > 0);
-      productNames.push(...names);
-    }
-
-    // Clean up and process the response for customer-friendliness
-    // Remove both [USED_CHUNK: ...] and [PRODUCTS: ...] markers
-    const cleanResponse = this.processCustomerResponse(
-      response
-        .replace(/\[USED_CHUNK: \w+\]/g, '')
-        .replace(/\[PRODUCTS:\s*[^\]]+\]/g, '')
-        .trim(),
-      agentType
-    );
-
-    // Extract product recommendations from context if available (except for clarification agent)
-    const recommendations = agentType !== 'clarification_agent' 
-      ? this.extractProductRecommendations(contextChunks, intent)
-      : undefined;
-
-    return {
-      response: cleanResponse,
-      usedChunkIds,
-      productNames: productNames.length > 0 ? productNames : undefined,
-      recommendations
-    };
-  }
-
-  /**
-   * Process response to ensure it's customer-friendly, conversational, and preserves markdown formatting
-   */
-  private processCustomerResponse(response: string, agentType: string): string {
-    // Remove technical references
-    let processedResponse = response
-      .replace(/based on (our )?product documentation/gi, '')
-      .replace(/based on (our )?uploaded documents/gi, '')
-      .replace(/from (our )?product documentation/gi, '')
-      .replace(/from (our )?uploaded documents/gi, '')
-      .replace(/according to (our )?product documentation/gi, '')
-      .replace(/according to (our )?uploaded documents/gi, '')
-      .replace(/in (our )?product documentation/gi, '')
-      .replace(/in (our )?uploaded documents/gi, '')
-      .replace(/product documentation shows/gi, '')
-      .replace(/uploaded documents show/gi, '')
-      .replace(/documentation indicates/gi, '')
-      .replace(/documents indicate/gi, '')
-      .replace(/as an AI/gi, '')
-      .replace(/as an assistant/gi, '')
-      .replace(/I'm an AI/gi, '')
-      .replace(/I'm an assistant/gi, '')
-      .replace(/I'm a chatbot/gi, '')
-      .replace(/I'm a bot/gi, '');
-
-    // Preserve markdown formatting - DO NOT strip bold (**text**) or other markdown
-    // Just clean up excessive whitespace while preserving structure
-    processedResponse = processedResponse
-      .replace(/\n{3,}/g, '\n\n') // Reduce multiple newlines to double newlines (paragraph breaks)
-      .replace(/[ \t]+/g, ' ') // Clean up extra spaces/tabs within lines (not newlines)
-      .replace(/\n /g, '\n') // Remove spaces after newlines
-      .replace(/ \n/g, '\n') // Remove spaces before newlines
-      .trim();
-
-    // Convert any remaining $ prices to ₹
-    processedResponse = processedResponse.replace(/\$(\d+(?:\.\d+)?)/g, (match, amount) => {
-      const rupees = Math.round(parseFloat(amount) * 83); // Approximate conversion
-      return `₹${rupees}`;
-    });
-
-    // Clean up punctuation spacing (but preserve markdown bullets and formatting)
-    processedResponse = processedResponse
-      .replace(/\s+([,.!?])/g, '$1') // Remove space before punctuation
-      .replace(/([,.!?])([^\s\n])/g, '$1 $2') // Add space after punctuation if missing
-      .trim();
-
-    // Increase word limit to accommodate more products with concise descriptions
-    const words = processedResponse.split(/\s+/);
-    if (words.length > 800) {
-      // Find a good breaking point (end of sentence) near the word limit
-      const truncated = words.slice(0, 800).join(' ');
-      const lastSentenceEnd = Math.max(
-        truncated.lastIndexOf('.'),
-        truncated.lastIndexOf('!'),
-        truncated.lastIndexOf('?')
-      );
-      if (lastSentenceEnd > truncated.length * 0.7) {
-        processedResponse = truncated.substring(0, lastSentenceEnd + 1);
-      } else {
-        processedResponse = truncated + '...';
-      }
-    }
-
-    // Ensure response ends properly if it doesn't
-    if (!processedResponse.match(/[.!?]$/)) {
-      processedResponse += '.';
-    }
-
-    return processedResponse;
-  }
-
-  /**
-   * Extract product recommendations from context chunks (up to 10 products)
-   */
-  private extractProductRecommendations(
-    contextChunks: Array<{ id: string; content: string; originalData: any }>,
-    intent: { type: string; suggestedActions: string[] }
-  ): {
-    products: Array<{
-      name: string;
-      description: string;
-      price?: string;
-      features: string[];
-      sourceUrl?: string;
-    }>;
-  } | undefined {
-    // Only extract recommendations for product-related intents
-    if (!['product_inquiry', 'purchase_intent', 'comparison'].includes(intent.type)) {
-      return undefined;
-    }
-
-    const products: Array<{
-      name: string;
-      description: string;
-      price?: string;
-      features: string[];
-      sourceUrl?: string;
-    }> = [];
-
-    // Enhanced extraction logic - look for product information in chunks
-    contextChunks.forEach(chunk => {
-      const content = chunk.content.toLowerCase();
-      
-      // Look for product names, prices, and features with more flexible patterns
-      if (content.includes('product') || content.includes('price') || content.includes('₹') || content.includes('$') || content.includes('rupee')) {
-        const lines = chunk.content.split('\n');
-        let productName = '';
-        let description = '';
-        let price = '';
-        const features: string[] = [];
-
-        lines.forEach(line => {
-          // Extract product names
-          if ((line.toLowerCase().includes('product') || line.toLowerCase().includes('model') || line.toLowerCase().includes('item')) && line.length < 100) {
-            productName = line.replace(/\[.*?\]/g, '').trim();
-          }
-          
-          // Extract prices (convert to rupees)
-          if (line.includes('₹') || line.includes('$') || line.toLowerCase().includes('price') || line.toLowerCase().includes('rupee')) {
-            let extractedPrice = line.replace(/\[.*?\]/g, '').trim();
-            // Convert $ to ₹ if needed
-            if (extractedPrice.includes('$')) {
-              const dollarAmount = extractedPrice.match(/\$(\d+(?:\.\d+)?)/);
-              if (dollarAmount) {
-                const rupees = Math.round(parseFloat(dollarAmount[1]) * 83); // Approximate conversion
-                extractedPrice = `₹${rupees}`;
-              }
-            }
-            price = extractedPrice;
-          }
-          
-          // Extract features
-          if (line.length > 20 && line.length < 200 && !line.includes('[') && !line.toLowerCase().includes('chunk')) {
-            features.push(line.trim());
-          }
-        });
-
-        if (productName && features.length > 0) {
-          // Only include price if specifically asked about pricing
-          const shouldIncludePrice = intent.suggestedActions.includes('show_pricing') || 
-                                   intent.type === 'purchase_intent';
-
-          products.push({
-            name: productName,
-            description: description || features.slice(0, 2).join(' '),
-            price: (price && shouldIncludePrice) ? price : undefined,
-            features: features.slice(0, 4), // Limit to 4 features
-            sourceUrl: chunk.originalData.metadata?.sourceUrl
-          });
-        }
-      }
-    });
-
-    // Remove duplicates based on product name
-    const uniqueProducts = products.filter((product, index, self) => 
-      index === self.findIndex(p => p.name.toLowerCase() === product.name.toLowerCase())
-    );
-
-    return uniqueProducts.length > 0 ? { products: uniqueProducts.slice(0, 10) } : undefined;
-  }
-
-  /**
-   * Process customer query with multi-agent approach and clarification logic
-   * ALWAYS responds based on available context from uploaded documents
+   * Process customer query with intelligent sales agent approach
+   * Single unified LLM call for maximum performance
    */
   async processCustomerQuery(
     query: string,
     options: CustomerQueryOptions = {}
   ): Promise<CustomerQueryResponse> {
+    const startTime = Date.now();
+
     const {
       category = "",
       userId,
       sessionId,
-      retrievalCount = 12,
-      similarityThreshold = 0.5 // Lower threshold to get more context
+      retrievalCount = 15,
+      similarityThreshold = 0.45,
+      conversationHistory = [],
+      maxHistoryMessages = 5
     } = options;
 
-    console.log(`🛍️ Customer query: "${query}"`);
+    console.log(`🛍️ Customer query: "${query}" | User: ${userId || 'anonymous'}`);
+
 
     try {
-      // 1. Analyze customer intent
-      const intent = await this.analyzeCustomerIntent(query);
-      console.log(`🎯 Intent: ${intent.type} (confidence: ${intent.confidence})`);
+      // 1. Extract relevant products using LLM - considers BOTH conversation AND current query
+      const relevantProducts = await this.extractRelevantProducts(query, conversationHistory);
+      console.log(`🔒 Relevant products for query: ${relevantProducts.length > 0 ? relevantProducts.join(', ') : 'none'}`);
 
-      // 2. Check if query needs clarification
-      const clarification = await this.needsClarification(query, intent);
-      console.log(`❓ Needs clarification: ${clarification.needsClarification}`);
+      // 2. Get context chunks - use PRODUCT LOCKING if products found, else fall back to semantic search
+      let contextChunks: Array<{ id: string; content: string; filename: string; metadata?: any }> = [];
 
-      // 3. Select appropriate agent
-      const agentType = this.selectAgent(intent, clarification.needsClarification);
-      console.log(`🤖 Selected agent: ${agentType}`);
+      if (relevantProducts.length > 0) {
+        // PRODUCT LOCKING: Fetch ALL chunks for the specific products IN PARALLEL
+        console.log(`🎯 Using product locking for: ${relevantProducts.join(', ')}`);
+        const productsToFetch = relevantProducts.slice(0, 3); // Limit to 3 products
 
-      // 4. Use RAG service to get relevant context (skip LLM generation)
-      const ragResult = await ragService.queryDocuments(query, {
-        retrievalCount,
-        similarityThreshold,
-        productName: "", // No product filtering - search all documents
-        intent: "sales", // Use sales mode for customer-facing responses
-        skipGeneration: true // Skip LLM generation since customer service will handle it
-      });
+        // Parallel fetch for all products
+        const chunkResults = await Promise.all(
+          productsToFetch.map(async (productName) => {
+            try {
+              const productChunks = await qdrantService.getChunksByProductName(productName);
+              console.log(`  📦 Found ${productChunks.length} chunks for "${productName}"`);
+              return { productName, chunks: productChunks };
+            } catch (error) {
+              console.warn(`  ⚠️ Failed to fetch chunks for "${productName}":`, error);
+              return { productName, chunks: [] };
+            }
+          })
+        );
 
-      // 5. Generate response using selected agent
-      let contextChunks = ragResult.sources.map((source, index) => ({
-        id: `chunk_${index}`,
-        content: `[CHUNK_ID: chunk_${index}] [From: ${source.filename}]\n${source.content}`,
-        originalData: source
-      }));
-      console.log("🚀 ~ CustomerService ~ processCustomerQuery ~ contextChunks:", contextChunks);
+        // Organize chunks with clear product headers so LLM knows which product each chunk belongs to
+        for (const { productName, chunks } of chunkResults) {
+          if (chunks.length > 0) {
+            // Add a header chunk to clearly separate products
+            contextChunks.push({
+              id: `${productName}_header`,
+              content: `\n=== PRODUCT: ${productName} ===\n`,
+              filename: 'product_header',
+              metadata: { productName }
+            });
 
-      const customerResponse = await this.generateAgentResponse(
-        query,
-        intent,
-        agentType,
-        contextChunks
+            chunks.forEach((chunk, index) => {
+              contextChunks.push({
+                id: `${productName}_chunk_${index}`,
+                content: chunk.content,
+                filename: chunk.filename,
+                metadata: chunk.metadata
+              });
+            });
+          }
+        }
+      }
+
+      // If no chunks from product locking, fall back to semantic search
+      if (contextChunks.length === 0) {
+        console.log(`🔍 Falling back to semantic search for: "${query}"`);
+        const ragResult = await ragService.queryDocuments(query, {
+          retrievalCount,
+          similarityThreshold,
+          productName: "",
+          intent: "sales",
+          skipGeneration: true
+        });
+
+        contextChunks = ragResult.sources.map((source, index) => ({
+          id: `chunk_${index}`,
+          content: source.content,
+          filename: source.filename,
+          metadata: source.metadata
+        }));
+      }
+
+      console.log(`📚 Total context chunks: ${contextChunks.length}`);
+
+
+      // 3. Format conversation history (limit to last N messages)
+      const recentHistory = conversationHistory.slice(-maxHistoryMessages);
+      const historyText = recentHistory.length > 0
+        ? recentHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n')
+        : 'No previous conversation - this is the first message.';
+
+      // 4. Format context
+      const contextText = contextChunks.length > 0
+        ? contextChunks.map(c => `[From: ${c.filename}]\n${c.content}`).join('\n\n---\n\n')
+        : 'No specific product context available. Provide helpful general guidance.';
+
+      // 5. Build the unified prompt
+      const systemPrompt = this.INTELLIGENT_SALES_PROMPT
+        .replace('{query}', query)
+        .replace('{conversationHistory}', historyText)
+        .replace('{context}', contextText);
+
+      // 6. Single LLM call for everything (performance optimization)
+      console.log('🤖 Generating intelligent response...');
+      const llmResponse = await inferenceProvider.chatCompletion(
+        systemPrompt,
+        `Process this customer query and return the JSON response: "${query}"`,
+        { temperature: 0.3, maxTokens: 1500 }
       );
 
-      // 6. Prepare final response
+      // 7. Parse LLM response
+      const parsedResponse = this.parseIntelligentResponse(llmResponse, query);
+
+      const responseTimeMs = Date.now() - startTime;
+      console.log(`✅ Response generated in ${responseTimeMs}ms`);
+
+      // 8. Build final response
       const response: CustomerQueryResponse = {
         query,
-        response: customerResponse.response,
-        intent: {
-          ...intent,
-          type: clarification.needsClarification ? 'clarification_needed' : intent.type
+        response: parsedResponse.response,
+        intent: parsedResponse.intent,
+        suggestedFollowups: parsedResponse.suggestedFollowups,
+        productNames: parsedResponse.productNames,
+        recommendations: parsedResponse.recommendations,
+        contextAnalysis: {
+          isContextMissing: contextChunks.length === 0,
+          suggestedTopics: [],
+          category: 'answered',
+          priority: 'low' as const
         },
-        clarifyingQuestions: clarification.needsClarification ? clarification.clarifyingQuestions : undefined,
-        productNames: customerResponse.productNames,
-        recommendations: customerResponse.recommendations,
-        sources: ragResult.sources.map(source => ({
-          documentId: source.documentId,
-          filename: source.filename,
-          content: '', // Empty content to reduce response size
-          score: source.score,
-          metadata: [], // Empty metadata to reduce response size
-          sourceUrl: source.sourceUrl,
-          uploadType: source.uploadType
-        })),
-        contextAnalysis: ragResult.contextAnalysis,
-        agentType
+        agentType: 'sales_expert',
+        metadata: {
+          responseTimeMs,
+          contextChunksUsed: contextChunks.length
+        }
       };
 
-      console.log(`✅ ${agentType} response generated with ${response.sources.length} sources`);
       return response;
 
     } catch (error: any) {
       console.error("Customer query processing failed:", error);
-      
-      // Fallback response
+
+      const responseTimeMs = Date.now() - startTime;
+
+      // Graceful fallback with helpful guidance
       return {
         query,
-        response: "I'm unable to process your request at the moment. Please ensure our product documentation is properly uploaded and indexed, or contact our support team for assistance.",
+        response: "I'm having a brief moment! 😅 Let me get back to you - in the meantime, feel free to tell me more about what you're looking for, and I'll find the perfect products for you!",
         intent: {
           type: 'general',
           confidence: 0.5,
-          suggestedActions: ['contact_support']
+          suggestedActions: ['retry_query', 'contact_support']
         },
-        sources: [],
+        suggestedFollowups: [
+          "What type of product are you looking for today?",
+          "Is there a specific problem you're trying to solve?",
+          "Do you have a budget in mind?"
+        ],
         contextAnalysis: {
           isContextMissing: true,
           suggestedTopics: [],
           category: 'error',
           priority: 'high'
         },
-        agentType: 'support_agent'
+        agentType: 'sales_expert',
+        metadata: {
+          responseTimeMs,
+          contextChunksUsed: 0
+        }
       };
     }
+  }
+
+  /**
+   * Parse the intelligent LLM response with robust error handling
+   */
+  private parseIntelligentResponse(
+    llmResponse: string,
+    originalQuery: string
+  ): {
+    response: string;
+    intent: CustomerQueryResponse['intent'];
+    suggestedFollowups: string[];
+    productNames?: string[];
+    recommendations?: { products: ProductRecommendation[] };
+  } {
+    try {
+      // Clean up the response - remove markdown code blocks if present
+      let cleanedResponse = llmResponse
+        .replace(/```json\n?/gi, '')
+        .replace(/```\n?/gi, '')
+        .trim();
+
+      // Try to parse as JSON
+      const parsed = JSON.parse(cleanedResponse);
+
+      // Validate and extract fields with defaults
+      return {
+        response: this.cleanResponse(parsed.response || "I'd be happy to help you find the perfect product!"),
+        intent: {
+          type: parsed.intent?.type || 'product_inquiry',
+          confidence: parsed.intent?.confidence || 0.8,
+          suggestedActions: parsed.intent?.suggestedActions || ['recommend_products']
+        },
+        suggestedFollowups: this.ensureFollowups(parsed.suggestedFollowups),
+        productNames: Array.isArray(parsed.productNames) ? parsed.productNames : undefined,
+        recommendations: parsed.recommendations?.length > 0
+          ? { products: parsed.recommendations }
+          : undefined
+      };
+
+    } catch (parseError) {
+      console.warn('Failed to parse LLM JSON response, extracting content:', parseError);
+
+      // Fallback: Extract what we can from the raw response
+      return this.extractFromRawResponse(llmResponse, originalQuery);
+    }
+  }
+
+  /**
+   * Extract response data from non-JSON LLM output
+   */
+  private extractFromRawResponse(
+    rawResponse: string,
+    originalQuery: string
+  ): {
+    response: string;
+    intent: CustomerQueryResponse['intent'];
+    suggestedFollowups: string[];
+    productNames?: string[];
+    recommendations?: { products: ProductRecommendation[] };
+  } {
+    // Clean up the response
+    let cleanedResponse = rawResponse
+      .replace(/```json\n?/gi, '')
+      .replace(/```\n?/gi, '')
+      .replace(/\[PRODUCTS?:.*?\]/gi, '')
+      .replace(/\[CHUNK_ID:.*?\]/gi, '')
+      .trim();
+
+    // Try to extract product names from [PRODUCTS: ...] pattern
+    const productNames: string[] = [];
+    const productMatch = rawResponse.match(/\[PRODUCTS?:\s*([^\]]+)\]/i);
+    if (productMatch && productMatch[1]) {
+      const names = productMatch[1].split(',').map(n => n.trim()).filter(n => n.length > 0);
+      productNames.push(...names);
+    }
+
+    // Generate follow-up questions based on query type
+    const suggestedFollowups = this.generateDefaultFollowups(originalQuery);
+
+    return {
+      response: cleanedResponse.length > 20 ? cleanedResponse : "I'd love to help you find the perfect product! Could you tell me a bit more about what you're looking for?",
+      intent: {
+        type: 'product_inquiry',
+        confidence: 0.7,
+        suggestedActions: ['recommend_products']
+      },
+      suggestedFollowups,
+      productNames: productNames.length > 0 ? productNames : undefined
+    };
+  }
+
+  /**
+   * Ensure we always have 3 follow-up questions
+   */
+  private ensureFollowups(followups: any): string[] {
+    const defaultFollowups = [
+      "Would you like me to compare a few options for you?",
+      "Should I check current availability?",
+      "Is there anything specific you'd like to know about these products?"
+    ];
+
+    if (!Array.isArray(followups) || followups.length === 0) {
+      return defaultFollowups;
+    }
+
+    // Ensure exactly 3 follow-ups
+    const validFollowups = followups
+      .filter((f): f is string => typeof f === 'string' && f.length > 0)
+      .slice(0, 3);
+
+    while (validFollowups.length < 3) {
+      validFollowups.push(defaultFollowups[validFollowups.length]);
+    }
+
+    return validFollowups;
+  }
+
+  /**
+   * Generate default follow-ups based on query content
+   */
+  private generateDefaultFollowups(query: string): string[] {
+    const queryLower = query.toLowerCase();
+
+    if (queryLower.includes('price') || queryLower.includes('cost')) {
+      return [
+        "Would you like to see products in different price ranges?",
+        "Should I find you the best value option?",
+        "Are you looking for any specific features within your budget?"
+      ];
+    }
+
+    if (queryLower.includes('compare') || queryLower.includes('vs') || queryLower.includes('difference')) {
+      return [
+        "Would you like a detailed side-by-side comparison?",
+        "Which feature matters most to you?",
+        "Should I recommend the best option based on your needs?"
+      ];
+    }
+
+    if (queryLower.includes('best') || queryLower.includes('recommend')) {
+      return [
+        "What will you primarily use this for?",
+        "Do you have a preferred budget range?",
+        "Would you like to see our top-rated options?"
+      ];
+    }
+
+    return [
+      "What specific features are important to you?",
+      "Would you like me to show you our most popular options?",
+      "Is there anything else I can help you with today?"
+    ];
+  }
+
+  /**
+   * Extract RELEVANT product names based on BOTH the current query AND conversation history
+   * This is smarter than just extracting all products - it determines which product(s)
+   * the user is actually asking about in their current query
+   */
+  private async extractRelevantProducts(
+    currentQuery: string,
+    conversationHistory: ConversationMessage[]
+  ): Promise<string[]> {
+    if (conversationHistory.length === 0) {
+      return [];
+    }
+
+    try {
+      // Format recent conversation for LLM
+      const recentHistory = conversationHistory.slice(-4);
+      const historyText = recentHistory
+        .map(m => `${m.role.toUpperCase()}: ${m.content}`)
+        .join('\n');
+
+      const systemPrompt = `You are a smart product query analyzer.
+
+CONVERSATION HISTORY:
+${historyText}
+
+CURRENT USER QUERY:
+"${currentQuery}"
+
+YOUR TASK:
+Determine which specific product(s) from the conversation the user is asking about in their CURRENT query.
+
+DECISION LOGIC:
+1. If the user mentions a specific product in their current query → return ONLY that product
+2. If the user asks about "both" or "all" or compares products → return all relevant products
+3. If the user asks a follow-up (e.g., "what colors?", "how much?") without specifying → return the products being discussed
+4. If the user asks about a new topic/product not in conversation → return NONE
+
+KEY RULES:
+- Return EXACT product names as they appear in the conversation (e.g., "Frido Cloud Comfort Arch Support Slippers")
+- Return only products relevant to the CURRENT query, not all products mentioned
+- If user references "the first one", "the second option", "the arch support one" → identify which specific product
+- Maximum 3 products
+- If can't determine, return NONE
+
+OUTPUT FORMAT (just product names, one per line, or NONE):`;
+
+      const response = await inferenceProvider.chatCompletion(
+        systemPrompt,
+        "Determine relevant products",
+        { temperature: 0, maxTokens: 200 }
+      );
+
+      const result = response.trim();
+
+      // Check if no products found
+      if (result.toUpperCase() === 'NONE' || result.length < 5) {
+        return [];
+      }
+
+      // Parse product names (one per line)
+      const products = result
+        .split('\n')
+        .map(line => line.trim().replace(/^[\d\.\-\*]+\s*/, '')) // Remove numbering/bullets
+        .filter(line => line.length > 5 && !line.toUpperCase().includes('NONE'))
+        .slice(0, 3);
+
+      return products;
+
+    } catch (error) {
+      console.warn('Relevant product extraction failed:', error);
+      return [];
+    }
+  }
+
+
+
+  /**
+   * Clean up response text for WhatsApp formatting
+   */
+  private cleanResponse(response: string): string {
+
+    return response
+      // Remove technical markers
+      .replace(/\[CHUNK_ID:.*?\]/gi, '')
+      .replace(/\[PRODUCTS?:.*?\]/gi, '')
+      .replace(/\[From:.*?\]/gi, '')
+      .replace(/\[USED_CHUNK:.*?\]/gi, '')
+      // Clean up AI-references
+      .replace(/based on (our )?product documentation/gi, '')
+      .replace(/according to (our )?(uploaded )?documents/gi, '')
+      .replace(/as an AI/gi, '')
+      .replace(/I'm an AI/gi, '')
+      // Clean up whitespace
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
   }
 
   /**
@@ -813,7 +649,6 @@ Suggested Actions (choose 2-3 most relevant):
     intentDistribution: Record<string, number>;
     topProducts: Array<{ name: string; queries: number }>;
   }> {
-    // This would integrate with analytics storage in the future
     return {
       totalQueries: 0,
       intentDistribution: {},
