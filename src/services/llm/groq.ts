@@ -7,17 +7,23 @@ const groq = new Groq({
   timeout: env.API_TIMEOUT,
 });
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 /**
  * Generate chat response using Groq's LLM models
  */
 export async function generateGroqChatResponse(
-  systemPrompt: string,
-  userPrompt: string,
-  options: {
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-  } = {}
+  messages: ChatMessage[],
+  options: ChatOptions = {}
 ): Promise<string> {
   const {
     model = env.GROQ_MODEL, // Use a fast, production-ready model
@@ -29,10 +35,7 @@ export async function generateGroqChatResponse(
     const response = await groq.chat.completions.create({
       model,
       service_tier:"auto",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
       temperature,
       max_tokens: maxTokens,
     });

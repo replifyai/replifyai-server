@@ -231,8 +231,18 @@ Examples:
 
 
     try {
+      // 0. Expand query first to understand context (especially for short responses like "yes")
+      const expandedQuery = await this.expandQueryWithContext(query, conversationHistory);
+      const shouldUseExpandedQuery = expandedQuery !== query && expandedQuery.length > query.length;
+      const effectiveQuery = shouldUseExpandedQuery ? expandedQuery : query;
+      
+      if (shouldUseExpandedQuery) {
+        console.log(`💡 Query expanded: "${query}" → "${expandedQuery}"`);
+      }
+
       // 1. Extract relevant products using LLM - considers BOTH conversation AND current query
-      const relevantProducts = await this.extractRelevantProducts(query, conversationHistory);
+      // Use expanded query for better product extraction
+      const relevantProducts = await this.extractRelevantProducts(effectiveQuery, conversationHistory);
       console.log(`🔒 Relevant products for query: ${relevantProducts.length > 0 ? relevantProducts.join(', ') : 'none'}`);
 
       // 2. Get context chunks - use PRODUCT LOCKING if products found, else fall back to semantic search
@@ -240,8 +250,11 @@ Examples:
 
       if (relevantProducts.length > 0) {
         // PRODUCT LOCKING: Fetch ALL chunks for the specific products IN PARALLEL
-        console.log(`🎯 Using product locking for: ${relevantProducts.join(', ')}`);
-        const productsToFetch = relevantProducts.slice(0, 3); // Limit to 3 products
+        // Check if this is a comparison query (multiple products)
+        const isComparisonQuery = relevantProducts.length > 1 || effectiveQuery.toLowerCase().includes('compare');
+        const maxProducts = isComparisonQuery ? 5 : 3; // Allow more products for comparison
+        console.log(`🎯 Using product locking for: ${relevantProducts.join(', ')} ${isComparisonQuery ? '(comparison)' : ''}`);
+        const productsToFetch = relevantProducts.slice(0, maxProducts);
 
         // Parallel fetch for all products
         const chunkResults = await Promise.all(
@@ -280,10 +293,12 @@ Examples:
         }
       }
 
-      // If no chunks from product locking, fall back to semantic search
+      // If no chunks from product locking, transform query for optimal Qdrant search
       if (contextChunks.length === 0) {
-        console.log(`🔍 Falling back to semantic search for: "${query}"`);
-        const ragResult = await ragService.queryDocuments(query, {
+        // Transform query to be search-optimized for product discovery
+        const searchQuery = await this.transformQueryForSearch(effectiveQuery, conversationHistory);
+        console.log(`🔍 Falling back to semantic search for: "${effectiveQuery}" → "${searchQuery}"`);
+        const ragResult = await ragService.queryDocuments(searchQuery, {
           retrievalCount,
           similarityThreshold,
           productName: "",
@@ -319,12 +334,37 @@ Examples:
         .replace('{conversationHistory}', historyText)
         .replace('{context}', contextText);
 
-      // 6. Single LLM call for everything (performance optimization)
+      // 6. Build messages array with conversation history for full context awareness
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        { role: 'system', content: systemPrompt }
+      ];
+
+      // Add conversation history as messages (excluding the current query)
+      if (recentHistory.length > 0) {
+        recentHistory.forEach(msg => {
+          messages.push({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          });
+        });
+      }
+
+      // Add the current query as the final user message
+      messages.push({
+        role: 'user',
+        content: `Process this customer query and return the JSON response: "${query}"`
+      });
+
+      // 7. Single LLM call for everything (performance optimization)
       console.log('🤖 Generating intelligent response...');
       const llmResponse = await inferenceProvider.chatCompletion(
         systemPrompt,
         `Process this customer query and return the JSON response: "${query}"`,
-        { temperature: 0.3, maxTokens: 1500 }
+        { 
+          temperature: 0.3, 
+          maxTokens: 1500,
+          messages: messages
+        }
       );
 
       // 7. Parse LLM response
@@ -544,9 +584,218 @@ Examples:
   }
 
   /**
+   * Transform query into search-optimized format for Qdrant semantic search
+   * Converts recommendation requests into product discovery queries
+   * Example: "recommend outdoor shoes" → "Best outdoor slippers with comfort and support"
+   */
+  private async transformQueryForSearch(
+    query: string,
+    conversationHistory: ConversationMessage[]
+  ): Promise<string> {
+    // If query is already detailed and search-friendly, return as-is
+    const queryWords = query.trim().split(/\s+/).length;
+    if (queryWords > 6 && (query.toLowerCase().includes('best') || query.toLowerCase().includes('top') || query.toLowerCase().includes('quality'))) {
+      return query;
+    }
+
+    try {
+      const recentHistory = conversationHistory.slice(-4);
+      
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        {
+          role: 'system',
+          content: `You are a search query optimizer. Transform user queries into optimal product search queries for a vector database.
+
+YOUR TASK:
+Transform the user's query into a search-optimized query that will find the best matching products.
+
+TRANSFORMATION RULES:
+1. Add search-friendly terms: "best", "top", "quality", "comfortable", "durable" when appropriate
+2. Convert recommendation requests into product discovery queries:
+   - "recommend outdoor shoes" → "Best outdoor slippers with comfort and support"
+   - "show me comfortable slippers" → "Best comfortable slippers with arch support"
+   - "find outdoor options" → "Top outdoor slippers with comfort features"
+3. Include key features mentioned in conversation (comfort, support, outdoor use, etc.)
+4. Use product category terms: "slippers", "shoes", "insoles", etc.
+5. Keep it concise (6-12 words max) but descriptive
+6. Focus on product attributes that matter for search: comfort, support, durability, outdoor use, etc.
+
+EXAMPLES:
+- Input: "recommend outdoor shoes" → Output: "Best outdoor slippers with comfort and support"
+- Input: "yes" (context: assistant asked about outdoor shoes) → Output: "Best outdoor slippers with comfort features"
+- Input: "comfortable slippers" → Output: "Best comfortable slippers with arch support"
+- Input: "show me options" → Output: "Top quality slippers with comfort and support"
+
+OUTPUT FORMAT: Just the optimized search query, nothing else.`
+        }
+      ];
+
+      // Add conversation history for context
+      if (recentHistory.length > 0) {
+        recentHistory.forEach(msg => {
+          messages.push({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          });
+        });
+      }
+
+      // Add current query
+      messages.push({
+        role: 'user',
+        content: `Transform this query into a search-optimized product discovery query: "${query}"`
+      });
+
+      const response = await inferenceProvider.chatCompletion(
+        messages[0].content,
+        messages[messages.length - 1].content,
+        { 
+          temperature: 0.3, 
+          maxTokens: 100,
+          messages: messages
+        }
+      );
+
+      const transformed = response.trim();
+      
+      // Validate transformed query
+      if (transformed.length > 10 && transformed.length < 150) {
+        // Clean up any extra text that might have been added
+        const cleaned = transformed
+          .replace(/^(optimized query|search query|query):\s*/i, '')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+        return cleaned;
+      }
+
+      // Fallback: enhance query manually if LLM transformation fails
+      return this.enhanceQueryManually(query);
+    } catch (error) {
+      console.warn('Query transformation failed:', error);
+      return this.enhanceQueryManually(query);
+    }
+  }
+
+  /**
+   * Manual query enhancement as fallback
+   */
+  private enhanceQueryManually(query: string): string {
+    const queryLower = query.toLowerCase();
+    
+    // Add "best" if not present and query is about recommendations
+    if ((queryLower.includes('recommend') || queryLower.includes('show') || queryLower.includes('find')) && !queryLower.includes('best')) {
+      return `Best ${query.replace(/^(recommend|show me|find|i want|i need)\s*/i, '').trim()}`;
+    }
+    
+    // Add "best" for short queries
+    if (query.split(/\s+/).length <= 4 && !queryLower.includes('best') && !queryLower.includes('top')) {
+      return `Best ${query}`;
+    }
+    
+    // Enhance with common product attributes if missing
+    if (!queryLower.includes('comfort') && !queryLower.includes('support') && !queryLower.includes('quality')) {
+      if (queryLower.includes('slipper') || queryLower.includes('shoe')) {
+        return `${query} with comfort and support`;
+      }
+    }
+    
+    return query;
+  }
+
+  /**
+   * Expand query with conversation context to understand short responses like "yes", "no", etc.
+   * This helps the system understand what the user actually wants when they give brief responses
+   */
+  private async expandQueryWithContext(
+    currentQuery: string,
+    conversationHistory: ConversationMessage[]
+  ): Promise<string> {
+    // If query is already detailed (more than 3 words), return as-is
+    if (currentQuery.trim().split(/\s+/).length > 3) {
+      return currentQuery;
+    }
+
+    // If no conversation history, return as-is
+    if (conversationHistory.length === 0) {
+      return currentQuery;
+    }
+
+    // Check if query is a short response that needs expansion
+    const shortResponses = ['yes', 'no', 'sure', 'okay', 'ok', 'yep', 'nope', 'yeah', 'nah', 'maybe', 'thanks', 'thank you'];
+    const queryLower = currentQuery.toLowerCase().trim();
+    
+    if (!shortResponses.some(response => queryLower === response || queryLower.startsWith(response))) {
+      return currentQuery;
+    }
+
+    try {
+      // Get recent conversation (last 4 messages)
+      const recentHistory = conversationHistory.slice(-4);
+      
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        {
+          role: 'system',
+          content: `You are a query expansion assistant. Your task is to understand what the user actually wants when they give a short response like "yes", "no", etc.
+
+CRITICAL RULES:
+1. Look at the LAST assistant message to understand what question the user is responding to
+2. If assistant asked "Would you like me to recommend X?" and user says "yes" → expand to "recommend X" or "show me X"
+3. If assistant asked "Would you like to compare the features of these options?" or "Would you like to compare X and Y?" and user says "yes" → expand to "compare features of [products mentioned in assistant's message]"
+4. If assistant asked about comparing specific products (e.g., "Would you like to compare the features of Product A and Product B?") and user says "yes" → expand to "compare Product A and Product B features"
+5. If assistant asked about a specific product feature and user says "yes" → expand to include that feature in the query
+6. If assistant asked "Can I help you with Y?" and user says "yes" → expand to "help with Y" or "show me Y"
+7. If user says "no", understand what they're rejecting and expand accordingly
+8. Preserve the user's intent - if they want outdoor shoes, expand to include "outdoor" in the query
+9. For comparison requests, extract product names from the assistant's message and include them in the expanded query
+10. Return ONLY the expanded query, nothing else - no explanations, no additional text
+
+OUTPUT FORMAT: Just the expanded query text, nothing else.`
+        }
+      ];
+
+      // Add conversation history
+      recentHistory.forEach(msg => {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        });
+      });
+
+      // Add current query
+      messages.push({
+        role: 'user',
+        content: `USER'S CURRENT QUERY: "${currentQuery}"\n\nExpand this query based on the conversation context above. Return only the expanded query.`
+      });
+
+      const response = await inferenceProvider.chatCompletion(
+        messages[0].content,
+        messages[messages.length - 1].content,
+        { 
+          temperature: 0.2, 
+          maxTokens: 100,
+          messages: messages
+        }
+      );
+
+      const expanded = response.trim();
+      
+      // Validate expanded query
+      if (expanded.length > 5 && expanded.length < 200) {
+        return expanded;
+      }
+
+      return currentQuery;
+    } catch (error) {
+      console.warn('Query expansion failed:', error);
+      return currentQuery;
+    }
+  }
+
+  /**
    * Extract RELEVANT product names based on BOTH the current query AND conversation history
    * This is smarter than just extracting all products - it determines which product(s)
-   * the user is actually asking about in their current query
+   * the user is actually asking about in their current query, including understanding
+   * context from yes/no responses and follow-up questions
    */
   private async extractRelevantProducts(
     currentQuery: string,
@@ -557,42 +806,75 @@ Examples:
     }
 
     try {
-      // Format recent conversation for LLM
-      const recentHistory = conversationHistory.slice(-4);
-      const historyText = recentHistory
-        .map(m => `${m.role.toUpperCase()}: ${m.content}`)
-        .join('\n');
-
-      const systemPrompt = `You are a smart product query analyzer.
-
-CONVERSATION HISTORY:
-${historyText}
-
-CURRENT USER QUERY:
-"${currentQuery}"
+      // Format recent conversation for LLM (use more history for better context)
+      const recentHistory = conversationHistory.slice(-6);
+      
+      // Build messages array with conversation history for better context understanding
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        {
+          role: 'system',
+          content: `You are a smart product query analyzer that understands conversation context deeply.
 
 YOUR TASK:
-Determine which specific product(s) from the conversation the user is asking about in their CURRENT query.
+Determine which specific EXISTING product(s) from the conversation the user is asking about in their CURRENT query.
 
-DECISION LOGIC:
-1. If the user mentions a specific product in their current query → return ONLY that product
-2. If the user asks about "both" or "all" or compares products → return all relevant products
-3. If the user asks a follow-up (e.g., "what colors?", "how much?") without specifying → return the products being discussed
-4. If the user asks about a new topic/product not in conversation → return NONE
+CRITICAL CONTEXT UNDERSTANDING:
+1. If the current query is a short response like "yes", "no", "sure", "okay", "that works", etc.:
+   - Look at the LAST assistant message to understand what the user is responding to
+   - If assistant asked "Would you like to compare the features of these options?" or "Would you like to compare X and Y?" and user says "yes" → extract ALL product names mentioned in the assistant's message (look for product names in **bold** or mentioned explicitly)
+   - If assistant asked "Would you like me to recommend X?" or "Should I recommend X?" and user says "yes" → return NONE (user wants NEW recommendations, not existing products)
+   - If assistant asked "Would you like to see X?" or "Should I show you X?" and user says "yes" → return NONE (user wants to see new products)
+   - If assistant asked about a SPECIFIC EXISTING PRODUCT feature (e.g., "Can you wear Frido Cloud Comfort Arch Support Slippers outdoors?") and user says "yes" → return that specific product name
+   - If assistant asked a question about an existing product and user says "yes" → return that product name
+
+2. If the user mentions a specific product name in their current query → return ONLY that product
+
+3. If the user asks about "both" or "all" or compares products → return all relevant products from recent conversation (only actual product names)
+
+4. If the user asks a follow-up (e.g., "what colors?", "how much?", "can I wear it outdoors?") without specifying → return the products being discussed in the conversation
+
+5. If the user asks about a new topic/product not in conversation → return NONE
+
+6. For comparison requests: Extract product names from the assistant's message. Look for:
+   - Products mentioned in **bold** (markdown format)
+   - Products listed explicitly (e.g., "Product A or Product B")
+   - Products mentioned in the context of comparison
 
 KEY RULES:
-- Return EXACT product names as they appear in the conversation (e.g., "Frido Cloud Comfort Arch Support Slippers")
-- Return only products relevant to the CURRENT query, not all products mentioned
-- If user references "the first one", "the second option", "the arch support one" → identify which specific product
-- Maximum 3 products
-- If can't determine, return NONE
+- Return ONLY EXACT product names that were mentioned in the conversation (e.g., "Frido Cloud Comfort Arch Support Slippers")
+- DO NOT return descriptive phrases like "outdoor shoes", "comfortable slippers", "similar comfort features" - these are NOT product names
+- DO NOT return product types or categories - only actual product names
+- If assistant is asking to RECOMMEND or SHOW new products and user says "yes" → return NONE (let semantic search handle it)
+- For comparison: Extract ALL products mentioned in the assistant's comparison question
+- Maximum 5 products (for comparison scenarios)
+- If can't determine or user wants recommendations → return NONE
 
-OUTPUT FORMAT (just product names, one per line, or NONE):`;
+OUTPUT FORMAT (just product names, one per line, or NONE):`
+        }
+      ];
+
+      // Add conversation history as messages
+      recentHistory.forEach(msg => {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        });
+      });
+
+      // Add the current query
+      messages.push({
+        role: 'user',
+        content: `CURRENT USER QUERY: "${currentQuery}"\n\nDetermine relevant products based on this query and the conversation context above.`
+      });
 
       const response = await inferenceProvider.chatCompletion(
-        systemPrompt,
-        "Determine relevant products",
-        { temperature: 0, maxTokens: 200 }
+        messages[0].content,
+        messages[messages.length - 1].content,
+        { 
+          temperature: 0, 
+          maxTokens: 200,
+          messages: messages
+        }
       );
 
       const result = response.trim();
@@ -602,14 +884,57 @@ OUTPUT FORMAT (just product names, one per line, or NONE):`;
         return [];
       }
 
+      // Check if this is a comparison query
+      const isComparison = currentQuery.toLowerCase().includes('compare') || 
+                           conversationHistory[conversationHistory.length - 1]?.content?.toLowerCase().includes('compare') ||
+                           result.toLowerCase().includes('compare');
+      const maxProducts = isComparison ? 5 : 3;
+
       // Parse product names (one per line)
       const products = result
         .split('\n')
         .map(line => line.trim().replace(/^[\d\.\-\*]+\s*/, '')) // Remove numbering/bullets
-        .filter(line => line.length > 5 && !line.toUpperCase().includes('NONE'))
-        .slice(0, 3);
+        .filter(line => {
+          const trimmed = line.trim();
+          // Filter out invalid entries
+          if (trimmed.length < 5) return false;
+          if (trimmed.toUpperCase().includes('NONE')) return false;
+          // Filter out descriptive phrases (not product names)
+          // Product names typically have proper capitalization and specific structure
+          // Descriptive phrases like "outdoor shoes" or "similar comfort features" should be filtered
+          const lower = trimmed.toLowerCase();
+          const commonDescriptivePhrases = [
+            'outdoor shoes', 'outdoor', 'shoes', 'slippers', 'comfort features',
+            'similar', 'features', 'comfortable', 'recommendations', 'options',
+            'products', 'alternatives', 'suggestions'
+          ];
+          // If it's just a descriptive phrase (2-3 words, common terms), likely not a product name
+          if (commonDescriptivePhrases.some(phrase => lower.includes(phrase) && trimmed.split(/\s+/).length <= 4)) {
+            // But allow if it's part of a longer product name
+            if (trimmed.split(/\s+/).length <= 4 && !trimmed.match(/^[A-Z]/)) {
+              return false; // Likely a descriptive phrase, not a product name
+            }
+          }
+          return true;
+        })
+        .slice(0, maxProducts);
 
-      return products;
+      // Additional validation: Check if extracted products look like actual product names
+      // Product names should have proper structure (not just generic descriptions)
+      const validatedProducts = products.filter(product => {
+        // Product names should be at least 10 characters and have some structure
+        if (product.length < 10) return false;
+        // Should not be just generic descriptions
+        const genericPatterns = /^(outdoor|comfortable|similar|features|shoes|slippers|recommend|show|find)/i;
+        if (genericPatterns.test(product) && product.split(/\s+/).length <= 4) {
+          return false;
+        }
+        return true;
+      });
+
+      console.log(`🔍 Extracted products: ${products.join(', ') || 'none'} | Validated: ${validatedProducts.join(', ') || 'none'}`);
+      
+      return validatedProducts;
 
     } catch (error) {
       console.warn('Relevant product extraction failed:', error);

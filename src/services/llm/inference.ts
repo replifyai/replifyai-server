@@ -5,10 +5,16 @@ import { generateNebiusChatResponse } from "./nebius.js";
 
 export type InferenceProviderName = "openai" | "groq" | "nebius";
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatOptions {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  messages?: ChatMessage[];
 }
 
 /**
@@ -52,12 +58,23 @@ export const inferenceProvider = {
   ): Promise<string> {
     const provider = this.active;
     
+    // Build messages array - if messages are provided, use them; otherwise use systemPrompt and userPrompt
+    let messages: ChatMessage[];
+    if (options.messages && options.messages.length > 0) {
+      messages = options.messages;
+    } else {
+      messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ];
+    }
+    
     switch (provider) {
       case "groq": {
         // Try Groq with exponential backoff, fallback to Nebius on failure
         try {
           const response = await retryWithBackoff(
-            () => generateGroqChatResponse(systemPrompt, userPrompt, options),
+            () => generateGroqChatResponse(messages, options),
             3,
             500
           );
@@ -65,7 +82,7 @@ export const inferenceProvider = {
         } catch (error) {
           console.error("Groq inference failed, falling back to Nebius:", (error as Error).message);
           try {
-            const response = await generateNebiusChatResponse(systemPrompt, userPrompt, options);
+            const response = await generateNebiusChatResponse(messages, options);
             return response;
           } catch (nebiusError) {
             console.error("Nebius fallback also failed:", (nebiusError as Error).message);
@@ -75,17 +92,14 @@ export const inferenceProvider = {
       }
       
       case "nebius":
-        return generateNebiusChatResponse(systemPrompt, userPrompt, options);
+        return generateNebiusChatResponse(messages, options);
       
       case "openai":
       default: {
         const { model = "gpt-5", maxTokens = 1000 } = options;
         const response = await openai.chat.completions.create({
           model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
+          messages: messages.map(m => ({ role: m.role, content: m.content })),
           max_completion_tokens: maxTokens,
         });
         return response.choices[0]?.message?.content || "I couldn't generate a response.";

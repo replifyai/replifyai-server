@@ -8,6 +8,11 @@ const nebius = new OpenAI({
   timeout: env.API_TIMEOUT,
 });
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 export interface ChatOptions {
   model?: string;
   temperature?: number;
@@ -15,8 +20,7 @@ export interface ChatOptions {
 }
 
 export async function generateNebiusChatResponse(
-  systemPrompt: string,
-  userPrompt: string,
+  messages: ChatMessage[],
   options: ChatOptions = {},
   llmmodel?: string
 ): Promise<string> {
@@ -29,10 +33,7 @@ export async function generateNebiusChatResponse(
 
   const response = await nebius.chat.completions.create({
     model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
     temperature,
     max_tokens: maxTokens,
   });
