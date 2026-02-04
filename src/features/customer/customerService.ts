@@ -132,10 +132,14 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
   ],
   "recommendations": [
     {
-      "name": "Exact Product Name",
+      "title": "Exact Product Name",
       "description": "Brief compelling description",
-      "price": "₹XXX (if available in context)",
+      "price": {
+          "amount": "₹XXX (if available in context)", in numeric format,
+          "currency": "INR"
+        },
       "relevanceReason": "Why this is perfect for them"
+      "handle":"the-collection-snowboard-oxygen" (for now keep it this only)
     }
   ]
 }
