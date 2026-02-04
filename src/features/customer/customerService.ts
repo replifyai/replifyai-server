@@ -163,7 +163,8 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
 • End with a clear direction (not just "let me know")
 
 🛒 SALES INTELLIGENCE:
-• ALWAYS suggest 2-3 products when relevant (give options!)
+• ALWAYS suggest 2-3 SPECIFIC products by their FULL NAME from the knowledge base (give options!)
+• Example: "I'd recommend the **Frido Ultimate Back Lumbar Cushion** for office use, or the **Frido Ultimate Car Backrest Cushion** if you spend a lot of time driving."
 • Highlight the BEST VALUE option naturally
 • Mention "popular choice" or "customer favorite" when applicable
 • Create gentle urgency: "This has been flying off the shelves"
@@ -202,13 +203,18 @@ Examples:
 • SUPPORT ISSUE: Be empathetic, solve quickly, then suggest relevant products
 
 ═══════════════════════════════════════════════════════════════════════════════
-⚠️ CRITICAL REMINDERS
+⚠️ CRITICAL REMINDERS - READ CAREFULLY
 ═══════════════════════════════════════════════════════════════════════════════
-1. Use EXACT product names from the context - never make up generic names
-2. Only mention products that exist in the provided context
-3. Prices in ₹ (Indian Rupees) only
-4. ALWAYS provide exactly 3 suggestedFollowups
-5. Response must be valid JSON - no markdown code blocks around it
+1. **MANDATORY**: Use the EXACT FULL product names from the PRODUCT KNOWLEDGE BASE above
+   - CORRECT: "Frido Ultimate Back Lumbar Cushion"
+   - WRONG: "lumbar cushion", "back support pillow", "back cushion"
+   - The products in the knowledge base are REAL products we sell - recommend them by their FULL NAME
+2. NEVER use generic product descriptions - always use the specific product names provided
+3. Only mention products that exist in the provided context
+4. Prices in ₹ (Indian Rupees) only
+5. ALWAYS provide exactly 3 suggestedFollowups
+6. Response must be valid JSON - no markdown code blocks around it
+7. In the "recommendations" array, use the EXACT product names as the "title"
 `;
 
   /**
@@ -327,9 +333,13 @@ Examples:
         ? recentHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n')
         : 'No previous conversation - this is the first message.';
 
-      // 4. Format context
+      // 4. Format context - make product names prominent
       const contextText = contextChunks.length > 0
-        ? contextChunks.map(c => `[From: ${c.filename}]\n${c.content}`).join('\n\n---\n\n')
+        ? contextChunks.map(c => {
+            // Extract product name from metadata or filename for better clarity
+            const productName = c.metadata?.productName || c.metadata?.product_name || c.filename?.replace(/\.[^/.]+$/, '') || 'Unknown Product';
+            return `=== PRODUCT: ${productName} ===\n${c.content}`;
+          }).join('\n\n---\n\n')
         : 'No specific product context available. Provide helpful general guidance.';
 
       // 5. Build the unified prompt
@@ -614,21 +624,24 @@ YOUR TASK:
 Transform the user's query into a search-optimized query that will find the best matching products.
 
 TRANSFORMATION RULES:
-1. Add search-friendly terms: "best", "top", "quality", "comfortable", "durable" when appropriate
-2. Convert recommendation requests into product discovery queries:
-   - "recommend outdoor shoes" → "Best outdoor slippers with comfort and support"
+1. PRESERVE THE USER'S ORIGINAL INTENT - this is critical!
+2. Add search-friendly terms: "best", "top", "quality", "relief", "support" when appropriate
+3. If the user mentions a health condition (back pain, foot pain, heel pain, plantar fasciitis, etc.), keep that condition in the query
+4. Convert recommendation requests into product discovery queries while preserving the core topic:
+   - "products for back pain" → "Best products for back pain relief and support"
+   - "help with heel pain" → "Best heel pain relief products and cushions"
+   - "recommend outdoor shoes" → "Best outdoor footwear with comfort and support"
    - "show me comfortable slippers" → "Best comfortable slippers with arch support"
-   - "find outdoor options" → "Top outdoor slippers with comfort features"
-3. Include key features mentioned in conversation (comfort, support, outdoor use, etc.)
-4. Use product category terms: "slippers", "shoes", "insoles", etc.
-5. Keep it concise (6-12 words max) but descriptive
-6. Focus on product attributes that matter for search: comfort, support, durability, outdoor use, etc.
+5. Include key features mentioned in conversation (pain relief, comfort, support, outdoor use, etc.)
+6. Keep it concise (6-12 words max) but descriptive
+7. DO NOT change the subject matter - if they ask about back pain, search for back pain products, NOT shoes
 
 EXAMPLES:
-- Input: "recommend outdoor shoes" → Output: "Best outdoor slippers with comfort and support"
-- Input: "yes" (context: assistant asked about outdoor shoes) → Output: "Best outdoor slippers with comfort features"
+- Input: "Suggest products for my back pain" → Output: "Best products for back pain relief and lumbar support"
+- Input: "I have heel pain" → Output: "Best heel pain relief products with cushioning"
+- Input: "recommend outdoor shoes" → Output: "Best outdoor footwear with comfort and support"
 - Input: "comfortable slippers" → Output: "Best comfortable slippers with arch support"
-- Input: "show me options" → Output: "Top quality slippers with comfort and support"
+- Input: "products for plantar fasciitis" → Output: "Best plantar fasciitis relief insoles and products"
 
 OUTPUT FORMAT: Just the optimized search query, nothing else.`
         }
@@ -687,18 +700,25 @@ OUTPUT FORMAT: Just the optimized search query, nothing else.`
     const queryLower = query.toLowerCase();
     
     // Add "best" if not present and query is about recommendations
-    if ((queryLower.includes('recommend') || queryLower.includes('show') || queryLower.includes('find')) && !queryLower.includes('best')) {
-      return `Best ${query.replace(/^(recommend|show me|find|i want|i need)\s*/i, '').trim()}`;
+    if ((queryLower.includes('recommend') || queryLower.includes('show') || queryLower.includes('find') || queryLower.includes('suggest')) && !queryLower.includes('best')) {
+      return `Best ${query.replace(/^(recommend|show me|find|i want|i need|suggest|products for)\s*/i, '').trim()} products`;
+    }
+    
+    // Handle pain-related queries - add relief/support terms
+    if (queryLower.includes('pain') || queryLower.includes('ache') || queryLower.includes('hurt')) {
+      if (!queryLower.includes('relief') && !queryLower.includes('support')) {
+        return `Best products for ${query.replace(/^(products for|help with|help me with)\s*/i, '').trim()} relief and support`;
+      }
     }
     
     // Add "best" for short queries
     if (query.split(/\s+/).length <= 4 && !queryLower.includes('best') && !queryLower.includes('top')) {
-      return `Best ${query}`;
+      return `Best ${query} products`;
     }
     
     // Enhance with common product attributes if missing
     if (!queryLower.includes('comfort') && !queryLower.includes('support') && !queryLower.includes('quality')) {
-      if (queryLower.includes('slipper') || queryLower.includes('shoe')) {
+      if (queryLower.includes('slipper') || queryLower.includes('shoe') || queryLower.includes('insole') || queryLower.includes('sandal')) {
         return `${query} with comfort and support`;
       }
     }
