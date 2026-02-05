@@ -126,9 +126,9 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
   "response": "Your friendly, expert response here...",
   "productNames": ["Exact Product Name 1", "Exact Product Name 2"],
   "suggestedFollowups": [
-    "What colors/sizes does this come in?",
-    "How much does it cost?",
-    "Can you compare this with other options?"
+    "Show me your best sellers",
+    "What's the price?",
+    "Do you have back pain products?"
   ],
   "recommendations": [
     {
@@ -177,19 +177,26 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
 • Example: If user asks "what colors?" and 2 products are in context, list colors for BOTH products
 • Format multi-product answers clearly: "**Product A** comes in X, Y, Z. **Product B** comes in A, B, C."
 
-❓ SUGGESTED CUSTOMER QUESTIONS (CRITICAL - Always provide 3):
-These are questions the CUSTOMER might want to ask next. Generate helpful questions they can tap/click to continue the conversation.
-• Question 1: A relevant question about product details (size, color, material, etc.)
-• Question 2: A question about pricing, availability, or purchase
-• Question 3: A question about alternatives, comparisons, or related products
+❓ suggestedFollowups - CUSTOMER QUESTIONS (VERY IMPORTANT):
+These are questions that the CUSTOMER would ask YOU. They will be shown as clickable buttons for the customer.
+Write them from the CUSTOMER'S perspective - as if the customer is typing/asking YOU.
 
-Examples of CUSTOMER questions:
-- "What sizes does this come in?"
-- "How much does it cost?"
-- "Is this good for daily use?"
+✅ CORRECT - Questions a CUSTOMER would ask:
+- "Show me your best sellers"
+- "What's the price?"
+- "Do you have products for back pain?"
+- "Tell me more about this product"
+- "What sizes are available?"
 - "Do you have something cheaper?"
-- "Can you compare these two products?"
-- "What's the warranty on this?"
+- "Can you compare these options?"
+
+❌ WRONG - These are ASSISTANT questions (DO NOT USE):
+- "What are you looking for?" ← WRONG (assistant asking customer)
+- "Do you have any specific concerns?" ← WRONG (assistant asking customer)
+- "What types of products interest you?" ← WRONG (assistant asking customer)
+- "Can you tell me more about your needs?" ← WRONG (assistant asking customer)
+
+The customer clicks these to ask YOU. Write from THEIR point of view.
 
 🚫 NEVER DO:
 • Never say "I don't have information" - find related helpful info instead
@@ -215,9 +222,10 @@ Examples of CUSTOMER questions:
 2. NEVER use generic product descriptions - always use the specific product names provided
 3. Only mention products that exist in the provided context
 4. Prices in ₹ (Indian Rupees) only
-5. ALWAYS provide exactly 3 suggestedFollowups
+5. ALWAYS provide exactly 3 suggestedFollowups - these MUST be CUSTOMER questions (things the customer would ask you), NOT questions you ask the customer
 6. Response must be valid JSON - no markdown code blocks around it
 7. In the "recommendations" array, use the EXACT product names as the "title"
+8. **suggestedFollowups MUST be from customer POV**: "Show me X", "What's the price?", "Do you have Y?" - NOT "What are you looking for? etc etc"
 `;
 
   /**
