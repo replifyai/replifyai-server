@@ -126,9 +126,9 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
   "response": "Your friendly, expert response here...",
   "productNames": ["Exact Product Name 1", "Exact Product Name 2"],
   "suggestedFollowups": [
-    "Question to keep them engaged 1?",
-    "Question to guide toward purchase 2?",
-    "Cross-sell/upsell question 3?"
+    "What colors/sizes does this come in?",
+    "How much does it cost?",
+    "Can you compare this with other options?"
   ],
   "recommendations": [
     {
@@ -177,16 +177,19 @@ You MUST respond with a valid JSON object in EXACTLY this format (no markdown, n
 • Example: If user asks "what colors?" and 2 products are in context, list colors for BOTH products
 • Format multi-product answers clearly: "**Product A** comes in X, Y, Z. **Product B** comes in A, B, C."
 
-❓ FOLLOW-UP QUESTIONS (CRITICAL - Always provide 3):
-• Question 1: Clarifying question about their specific needs
-• Question 2: Question that leads toward purchase decision
-• Question 3: Cross-sell or upsell suggestion as a question
+❓ SUGGESTED CUSTOMER QUESTIONS (CRITICAL - Always provide 3):
+These are questions the CUSTOMER might want to ask next. Generate helpful questions they can tap/click to continue the conversation.
+• Question 1: A relevant question about product details (size, color, material, etc.)
+• Question 2: A question about pricing, availability, or purchase
+• Question 3: A question about alternatives, comparisons, or related products
 
-Examples:
-- "Would you like me to check the current availability for you?"
-- "Should I compare a few options based on your budget?"
-- "Would you also need [complementary product] to go with this?"
-- "Have you considered the premium version with [extra benefit]?"
+Examples of CUSTOMER questions:
+- "What sizes does this come in?"
+- "How much does it cost?"
+- "Is this good for daily use?"
+- "Do you have something cheaper?"
+- "Can you compare these two products?"
+- "What's the warranty on this?"
 
 🚫 NEVER DO:
 • Never say "I don't have information" - find related helpful info instead
@@ -425,9 +428,9 @@ Examples:
           suggestedActions: ['retry_query', 'contact_support']
         },
         suggestedFollowups: [
-          "What type of product are you looking for today?",
-          "Is there a specific problem you're trying to solve?",
-          "Do you have a budget in mind?"
+          "What products do you have?",
+          "Can you help me find something for my needs?",
+          "What are your best sellers?"
         ],
         contextAnalysis: {
           isContextMissing: true,
@@ -539,9 +542,9 @@ Examples:
    */
   private ensureFollowups(followups: any): string[] {
     const defaultFollowups = [
-      "Would you like me to compare a few options for you?",
-      "Should I check current availability?",
-      "Is there anything specific you'd like to know about these products?"
+      "What sizes/colors does this come in?",
+      "How much does it cost?",
+      "Do you have similar products?"
     ];
 
     if (!Array.isArray(followups) || followups.length === 0) {
@@ -561,39 +564,39 @@ Examples:
   }
 
   /**
-   * Generate default follow-ups based on query content
+   * Generate default follow-ups based on query content (customer questions they can ask)
    */
   private generateDefaultFollowups(query: string): string[] {
     const queryLower = query.toLowerCase();
 
     if (queryLower.includes('price') || queryLower.includes('cost')) {
       return [
-        "Would you like to see products in different price ranges?",
-        "Should I find you the best value option?",
-        "Are you looking for any specific features within your budget?"
+        "Do you have cheaper options?",
+        "What's included at this price?",
+        "Are there any discounts available?"
       ];
     }
 
     if (queryLower.includes('compare') || queryLower.includes('vs') || queryLower.includes('difference')) {
       return [
-        "Would you like a detailed side-by-side comparison?",
-        "Which feature matters most to you?",
-        "Should I recommend the best option based on your needs?"
+        "Which one is better for daily use?",
+        "What's the price difference?",
+        "Which one do customers prefer?"
       ];
     }
 
     if (queryLower.includes('best') || queryLower.includes('recommend')) {
       return [
-        "What will you primarily use this for?",
-        "Do you have a preferred budget range?",
-        "Would you like to see our top-rated options?"
+        "What sizes does this come in?",
+        "How much does it cost?",
+        "Can I see other options?"
       ];
     }
 
     return [
-      "What specific features are important to you?",
-      "Would you like me to show you our most popular options?",
-      "Is there anything else I can help you with today?"
+      "What colors/sizes are available?",
+      "How much does this cost?",
+      "Do you have something similar?"
     ];
   }
 
